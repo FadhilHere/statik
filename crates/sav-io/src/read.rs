@@ -3,7 +3,7 @@ use crate::compress::{Decompressor, Slot};
 use crate::records::*;
 use crate::SavError;
 use dataset::{validate_name, Column, Dataset, Measure, MissingSpec, OrderedValue, Variable};
-use encoding_rs::{Encoding, UTF_8, WINDOWS_1252};
+use encoding_rs::{Encoding, WINDOWS_1252};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
@@ -32,7 +32,7 @@ struct Extensions {
     char_code: Option<i32>,
     float_rep: Option<i32>,
     sysmis: Option<f64>,
-    display: Option<(usize, Vec<i32>)>,
+    display: Option<Vec<i32>>,
     long_names: Option<Vec<u8>>,
     very_long: Option<Vec<u8>>,
     encoding: Option<Vec<u8>>,
@@ -184,7 +184,7 @@ fn parse(bytes: &[u8]) -> Result<Dataset, SavError> {
 
     let encoding = pick_encoding(&ext)?;
     let decode = |b: &[u8]| decode_label(encoding, b);
-    let logical = group_very_long_strings(&phys, &ext, &decode)?;
+    let logical = group_very_long_strings(&phys, &ext, encoding)?;
     let sysmis = ext.sysmis.unwrap_or(SYSMIS);
 
     // Long names.
@@ -197,9 +197,11 @@ fn parse(bytes: &[u8]) -> Result<Dataset, SavError> {
         }
     }
 
-    // Measure per physical variable (subtype 11 has 2 or 3 integers per segment).
-    let measures: Option<Vec<i32>> = ext.display.as_ref().and_then(|(per, data)| {
-        (data.len() == per * phys.len()).then(|| data.chunks(*per).map(|c| c[0]).collect())
+    // Measure per physical variable: subtype 11 has 3 integers (measure, width, alignment)
+    // per segment, or 2 (measure, alignment) in old files. Ignored if the count fits neither.
+    let measures: Option<Vec<i32>> = ext.display.as_ref().and_then(|data| {
+        let per = if phys.is_empty() || data.len() % phys.len() != 0 { 0 } else { data.len() / phys.len() };
+        matches!(per, 2 | 3).then(|| data.chunks(per).map(|c| c[0]).collect())
     });
 
     // Value labels: dictionary index -> logical variable.
@@ -282,10 +284,7 @@ fn read_extension(subtype: i32, size: usize, count: usize, data: &[u8], endian: 
             ext.sysmis = Some(f64_from(data[..8].try_into().expect("8 bytes"), endian));
         }
         SUB_DISPLAY if size == 4 => {
-            let v = ints();
-            // 3 integers (measure, width, alignment) per segment, or 2 in old files.
-            let per = if v.len() % 3 == 0 { 3 } else { 2 };
-            ext.display = Some((per, v));
+            ext.display = Some(ints());
         }
         SUB_LONG_NAMES if size == 1 => ext.long_names = Some(data.to_vec()),
         SUB_VERY_LONG_STRINGS if size == 1 => ext.very_long = Some(data.to_vec()),
@@ -301,13 +300,31 @@ fn pick_encoding(ext: &Extensions) -> Result<&'static Encoding, SavError> {
         return Encoding::for_label(label.as_bytes())
             .ok_or_else(|| SavError::Unsupported(format!("character encoding {label}")));
     }
-    Ok(match ext.char_code {
-        Some(65001) => UTF_8,
-        Some(code) if code > 3 => {
-            Encoding::for_label(format!("windows-{code}").as_bytes()).unwrap_or(WINDOWS_1252)
-        }
-        _ => WINDOWS_1252,
-    })
+    Ok(ext.char_code.and_then(code_page_encoding).unwrap_or(WINDOWS_1252))
+}
+
+/// Encoding for a Windows code page number (subtype 3 "character code").
+/// `None` for unknown pages and for 1–3 (old ASCII/EBCDIC markers), which fall back to Windows-1252.
+pub(crate) fn code_page_encoding(code: i32) -> Option<&'static Encoding> {
+    let label = match code {
+        65001 => "utf-8",
+        20127 | 28591 => "windows-1252", // US-ASCII and ISO-8859-1: Windows-1252 is a superset
+        874 => "windows-874",
+        932 => "shift_jis",
+        936 => "gbk",
+        949 => "euc-kr",
+        950 => "big5",
+        1250..=1258 => return Encoding::for_label(format!("windows-{code}").as_bytes()),
+        20866 => "koi8-r",
+        21866 => "koi8-u",
+        28592..=28606 => return Encoding::for_label(format!("iso-8859-{}", code - 28590).as_bytes()),
+        51932 | 20932 => "euc-jp",
+        51936 => "gbk",
+        51949 => "euc-kr",
+        54936 => "gb18030",
+        _ => return None,
+    };
+    Encoding::for_label(label.as_bytes())
 }
 
 /// Decodes text from the file, dropping the space/NUL padding SPSS adds on the right.
@@ -319,11 +336,12 @@ fn decode_label(encoding: &'static Encoding, raw: &[u8]) -> String {
 fn group_very_long_strings(
     phys: &[PhysVar],
     ext: &Extensions,
-    decode: &dyn Fn(&[u8]) -> String,
+    encoding: &'static Encoding,
 ) -> Result<Vec<LogicalVar>, SavError> {
+    let decode = |b: &[u8]| decode_label(encoding, b);
     let mut widths: HashMap<String, usize> = HashMap::new();
     if let Some(raw) = &ext.very_long {
-        for entry in String::from_utf8_lossy(raw).split('\t') {
+        for entry in encoding.decode_without_bom_handling(raw).0.split('\t') {
             let entry = entry.trim_matches(['\0', ' ']);
             if let Some((short, w)) = entry.split_once('=') {
                 let w: usize = w
@@ -430,8 +448,10 @@ fn read_data(
     let n_slots = numeric_slot.len();
     let expected = usize::try_from(header_cases).ok();
     let endian = cur.endian;
-    // Every case takes at least one byte, so the file size bounds a sane capacity.
-    let cap = expected.unwrap_or(0).min(cur.remaining());
+    // Never trust the header's case count for allocation: a compressed slot needs at least
+    // one command byte and a raw slot 8 bytes, so the rest of the file bounds the case count.
+    let min_case_bytes = if compressed { n_slots } else { 8 * n_slots };
+    let cap = expected.unwrap_or(0).min(cur.remaining() / min_case_bytes.max(1));
     let mut columns: Vec<Column> = logical
         .iter()
         .map(|l| {
@@ -493,4 +513,28 @@ fn read_data(
         n_cases += 1;
     }
     Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_pages_map_to_encodings() {
+        let name = |c| code_page_encoding(c).map(Encoding::name);
+        assert_eq!(name(65001), Some("UTF-8"));
+        assert_eq!(name(1252), Some("windows-1252"));
+        assert_eq!(name(1250), Some("windows-1250"));
+        assert_eq!(name(874), Some("windows-874"));
+        assert_eq!(name(932), Some("Shift_JIS"));
+        assert_eq!(name(936), Some("GBK"));
+        assert_eq!(name(949), Some("EUC-KR"));
+        assert_eq!(name(950), Some("Big5"));
+        assert_eq!(name(20127), Some("windows-1252"));
+        assert_eq!(name(28591), Some("windows-1252"));
+        assert_eq!(name(28592), Some("ISO-8859-2"));
+        assert_eq!(name(54936), Some("gb18030"));
+        assert_eq!(name(2), None);
+        assert_eq!(name(12345), None);
+    }
 }

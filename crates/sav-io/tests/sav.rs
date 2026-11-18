@@ -300,3 +300,115 @@ fn zsav_is_unsupported() {
 fn missing_file_is_io_error() {
     assert!(matches!(read_sav(&fixture("does_not_exist.sav")), Err(SavError::Io(_))));
 }
+
+/// Minimal little-endian system file built in the test. `vars` are (short name bytes, type
+/// code); string variables get their continuation records. `ext` are record 7 subtypes as
+/// (subtype, size, data).
+fn build_sav(vars: &[(&[u8], i32)], ext: &[(i32, i32, Vec<u8>)], compression: i32, ncases: i32, data: &[u8]) -> Vec<u8> {
+    let i32b = |v: i32| v.to_le_bytes();
+    let slots = |t: i32| if t == 0 { 1 } else { (t as usize).div_ceil(8) };
+    let mut out = b"$FL2".to_vec();
+    out.extend_from_slice(&[b' '; 60]);
+    let total: usize = vars.iter().map(|v| slots(v.1)).sum();
+    for v in [2, total as i32, compression, 0, ncases] {
+        out.extend_from_slice(&i32b(v));
+    }
+    out.extend_from_slice(&100.0f64.to_le_bytes());
+    out.extend_from_slice(&[b' '; 9 + 8 + 64]);
+    out.extend_from_slice(&[0; 3]);
+    for (name, t) in vars {
+        let fmt = if *t == 0 { 0x0005_0802 } else { 0x0001_0000 | ((*t).min(255) << 8) };
+        for v in [2, *t, 0, 0, fmt, fmt] {
+            out.extend_from_slice(&i32b(v));
+        }
+        let mut n = name.to_vec();
+        n.resize(8, b' ');
+        out.extend_from_slice(&n);
+        for _ in 1..slots(*t) {
+            for v in [2, -1, 0, 0, 0, 0] {
+                out.extend_from_slice(&i32b(v));
+            }
+            out.extend_from_slice(&[0; 8]);
+        }
+    }
+    for (sub, size, d) in ext {
+        for v in [7, *sub, *size, d.len() as i32 / size] {
+            out.extend_from_slice(&i32b(v));
+        }
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&i32b(999));
+    out.extend_from_slice(&i32b(0));
+    out.extend_from_slice(data);
+    out
+}
+
+fn integer_info(char_code: i32) -> (i32, i32, Vec<u8>) {
+    (3, 4, [20, 0, 0, -1, 1, 0, 2, char_code].iter().flat_map(|v: &i32| v.to_le_bytes()).collect())
+}
+
+/// A header claiming 2^31-1 cases must not make the reader reserve memory per claimed case
+/// (it used to reserve min(ncases, file size) values for every variable and abort).
+#[test]
+fn huge_case_count_with_many_variables_is_an_error_not_an_abort() {
+    let names: Vec<Vec<u8>> = (0..20_000).map(|i| format!("V{i:07}").into_bytes()).collect();
+    let vars: Vec<(&[u8], i32)> = names.iter().map(|n| (n.as_slice(), 0)).collect();
+    for compression in [0, 1] {
+        let bytes = build_sav(&vars, &[], compression, i32::MAX, &vec![0u8; 2_000_000]);
+        let out = tmp(&format!("huge_ncases_{compression}.sav"));
+        std::fs::write(&out, bytes).unwrap();
+        let r = read_sav(&out);
+        assert!(matches!(r, Err(SavError::Format(_))), "compression {compression}: {:?}", r.map(|d| d.n_cases()));
+    }
+}
+
+/// Old files have 2 integers (measure, alignment) per variable in subtype 11; with 3
+/// variables the count (6) is a multiple of 3 and must still be read as 2 per variable.
+#[test]
+fn display_record_with_two_values_per_variable() {
+    let vars: [(&[u8], i32); 3] = [(b"A", 0), (b"B", 0), (b"C", 0)];
+    let display: Vec<u8> = [1, 1, 2, 1, 1, 1].iter().flat_map(|v: &i32| v.to_le_bytes()).collect();
+    let data: Vec<u8> = [1.0f64, 2.0, 3.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let out = tmp("display2.sav");
+    std::fs::write(&out, build_sav(&vars, &[(11, 4, display)], 0, 1, &data)).unwrap();
+    let ds = read_sav(&out).unwrap();
+    let m: Vec<Measure> = ids(&ds).into_iter().map(|id| ds.var(id).measure).collect();
+    assert_eq!(m, [Measure::Nominal, Measure::Ordinal, Measure::Nominal]);
+}
+
+/// Code page 932 (Shift_JIS) from subtype 3 decodes names and text.
+#[test]
+fn shift_jis_code_page() {
+    let (name, _, _) = encoding_rs::SHIFT_JIS.encode("名前");
+    let mut data = encoding_rs::SHIFT_JIS.encode("日本").0.into_owned();
+    data.resize(8, b' ');
+    let out = tmp("sjis.sav");
+    std::fs::write(&out, build_sav(&[(&name, 8)], &[integer_info(932)], 0, 1, &data)).unwrap();
+    let ds = read_sav(&out).unwrap();
+    assert_eq!(ds.var(VarId(0)).name, "名前");
+    match ds.column(VarId(0)) {
+        Column::Text(v) => assert_eq!(v[0], "日本"),
+        Column::Numeric(_) => panic!("expected a string"),
+    }
+}
+
+/// The very long string record (subtype 14) is in the file encoding, like the names.
+#[test]
+fn very_long_string_record_uses_file_encoding() {
+    let vars: [(&[u8], i32); 2] = [(b"K\xd6M", 255), (b"K\xd6M1", 48)];
+    let ext = [integer_info(1252), (14, 1, b"K\xd6M=00300\0\t".to_vec())];
+    let mut data = vec![b'a'; 255];
+    data.push(b' ');
+    data.extend_from_slice(&[b'b'; 45]);
+    data.resize(256 + 48, b' ');
+    let out = tmp("vls_cp1252.sav");
+    std::fs::write(&out, build_sav(&vars, &ext, 0, 1, &data)).unwrap();
+    let ds = read_sav(&out).unwrap();
+    assert_eq!(ds.n_vars(), 1);
+    assert_eq!(ds.var(VarId(0)).name, "KÖM");
+    assert_eq!(ds.var(VarId(0)).var_type, VarType::String { width: 300 });
+    match ds.column(VarId(0)) {
+        Column::Text(v) => assert_eq!(v[0], "a".repeat(255) + &"b".repeat(45)),
+        Column::Numeric(_) => panic!("expected a string"),
+    }
+}
