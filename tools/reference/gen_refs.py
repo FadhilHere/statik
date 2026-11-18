@@ -45,8 +45,44 @@ def write_edge_cases():
     df.to_csv(DATA / "edge_cases.csv", index=False, na_rep="")
 
 
+def case_describe_skripsi60():
+    from scipy import stats
+
+    x = pd.read_csv(DATA / "skripsi60.csv")["x1"].to_numpy(dtype=float)
+    n = len(x)
+    xs = np.sort(x)
+    # SPSS EXAMINE 5% trimmed mean: remove 0.05*n of mass from each end (fractional boundary case).
+    t = 0.05 * n
+    w = np.ones(n)
+    rem = t
+    for i in range(n):
+        d = min(1.0, rem)
+        w[i] -= d
+        rem -= d
+    rem = t
+    for i in range(n - 1, -1, -1):
+        d = min(1.0, rem)
+        w[i] -= d
+        rem -= d
+    trimmed = float((w * xs).sum() / w.sum())
+    q = [float(np.percentile(x, p, method="weibull")) for p in (25, 50, 75)]
+    return {
+        "case": "describe_skripsi60",
+        "values": {
+            "mean": float(x.mean()),
+            "var": float(x.var(ddof=1)),
+            "skew": float(stats.skew(x, bias=False)),
+            "kurt": float(stats.kurtosis(x, bias=False)),
+            "p25": q[0],
+            "p50": q[1],
+            "p75": q[2],
+            "trimmed5": trimmed,
+        },
+    }
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = []
+CASES = [case_describe_skripsi60]
 
 
 def main():
