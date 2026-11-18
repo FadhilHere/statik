@@ -17,3 +17,20 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
   - A constant dependent variable produces a single warning and no tables. The wording is SPSS-like but not verified.
   - A perfect fit shows "." for t, Sig., F, Durbin-Watson and Std. Residual, adds a warning, and skips the residual charts.
   - A predictor counts as constant when max == min or its centred SS ≤ 1e-12 × raw SS. Such a predictor is excluded with tolerance 0.
+
+## Normality: Explore, 1-Sample K-S, Shapiro-Wilk (Task 6)
+
+- **Monte Carlo Sig. in 1-Sample K-S.** SPSS terbaru mungkin juga menampilkan baris Monte Carlo Sig. di 1-Sample K-S; angka Monte Carlo tidak bisa identik karena generator acak SPSS tidak publik — konfirmasi dari screenshot pengguna. Statik shows no Monte Carlo row.
+- **Lilliefors Sig. between .100 and .200.** The Dallal-Wilkinson formula is used for every p and capped at .200 (lower bound). The formula is only claimed accurate for p < .10. statsmodels (`pvalmethod="approx"`) switches to a table interpolation above .10, and R `nortest` switches to the Stephens formula. The method SPSS uses in this range was not confirmed, so for p in .10–.20 the third decimal may differ from SPSS.
+- **Explore Descriptives decimals — unverified, check against a user's screenshot.** Mean, 95% CI bounds, 5% Trimmed Mean, Median and Interquartile Range use variable decimals + 2. Std. Error of Mean, Variance and Std. Deviation use + 3. Minimum, Maximum and Range use the variable's own decimals. Skewness, Kurtosis and their standard errors use `Fixed(3)`. All are capped at 16 decimals. This comes from recalled SPSS output (e.g. integer data: Mean 74.70, Variance 91.343, Minimum 50). The controller's fallback rule was "+2 for everything except skew/kurt". To change it, edit `descriptives()` in `procedures/src/explore.rs`.
+- **1-Sample K-S decimals:** Mean uses variable decimals + 2 and Std. Deviation uses + 3. For a saved residual with 5 decimals this gives `.0000000` and 8 decimals, which matches recalled SPSS output. Most Extreme Differences and Test Statistic use `Fixed(3)`.
+- **Footnote markers:** In Tests of Normality the lower-bound note is `*` and "Lilliefors Significance Correction" is `a`; the `a` is not attached to the "Kolmogorov-Smirnov" column header, because header markers are not supported. In the 1-Sample K-S table the Asymp. Sig. cell carries `c` and, for a lower bound, `d` (SPSS shows `.200c,d`); markers `a,b` ("Normal Parameters") and `c` are not attached to the row headers. The `c`/`d` placement in SPSS 27+ is not confirmed.
+- **Missing values:** Explore excludes cases listwise across all dependents (the SPSS default); "exclude pairwise" and "report values" are not implemented. 1-Sample K-S excludes test by test.
+- **Explore scope:** Only Descriptives, Tests of Normality and Normal Q-Q plots. There are no factor lists, M-estimators, outliers/extreme values, percentiles, stem-and-leaf, boxplot, detrended Q-Q, histogram or spread-vs-level output.
+- **Q-Q plot:** Expected values use Blom's (r − 3/8)/(n + 1/4), with tied values taking their mean rank. SPSS's handling of ties was not verified.
+- **Edge cases:**
+  - A constant dependent gets a warning and is omitted from Tests of Normality and the Q-Q plot.
+  - When n < 5 the K-S cells show "." and a warning is added. Shapiro-Wilk also shows "." outside 3 ≤ n ≤ 5000.
+  - 1-Sample K-S omits a constant variable, or one with fewer than 5 cases, and adds a warning.
+  - The warning wording is SPSS-like but not verified.
+- Shapiro-Wilk for 4 ≤ n ≤ 11 returns p = 1e-99 when log(1 − W) ≥ γ, as AS R94 does. scipy returns NaN in that case.
