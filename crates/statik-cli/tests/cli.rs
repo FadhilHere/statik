@@ -73,3 +73,14 @@ fn other_subcommands() {
         assert!(!stdout(&o).is_empty());
     }
 }
+
+#[test]
+fn regression_on_sav_file() {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sav/basic.sav");
+    let o = run(&["regression", p.to_str().unwrap(), "--dep", "gaji", "--indep", "id,puas"]);
+    assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    let s = stdout(&o);
+    for k in ["Model Summary", "ANOVA", "Coefficients"] {
+        assert!(s.contains(k), "missing {k}");
+    }
+}

@@ -1,5 +1,5 @@
-//! Command-line front end: run phase-1 procedures on a CSV file.
-use dataset::{Dataset, VarId, load_csv};
+//! Command-line front end: run phase-1 procedures on a data file (.sav, .csv, .txt, .xlsx).
+use dataset::{Dataset, VarId};
 use output_model::{OutputItem, render_html, render_text};
 use procedures::explore::{ExploreOptions, run_explore};
 use procedures::npar_ks::{NparKsOptions, run_npar_ks};
@@ -16,14 +16,14 @@ const USAGE: &str = "\
 statik-cli - run Statik procedures on a CSV file
 
 USAGE:
-  statik-cli regression   <csv> --dep y --indep x1,x2,x3 [--html out.html]
-  statik-cli ttest-ind    <csv> --var v --group g --groups 1,2 [--html out.html]
-  statik-cli ttest-paired <csv> --pair a,b [--html out.html]
-  statik-cli ttest-one    <csv> --var v --value 50 [--html out.html]
-  statik-cli explore      <csv> --var v [--html out.html]
-  statik-cli ks           <csv> --var v [--html out.html]
-  statik-cli runs         <csv> --var v [--html out.html]
-  statik-cli oneway       <csv> --dep y --factor g [--html out.html]
+  statik-cli regression   <file> --dep y --indep x1,x2,x3 [--html out.html]
+  statik-cli ttest-ind    <file> --var v --group g --groups 1,2 [--html out.html]
+  statik-cli ttest-paired <file> --pair a,b [--html out.html]
+  statik-cli ttest-one    <file> --var v --value 50 [--html out.html]
+  statik-cli explore      <file> --var v [--html out.html]
+  statik-cli ks           <file> --var v [--html out.html]
+  statik-cli runs         <file> --var v [--html out.html]
+  statik-cli oneway       <file> --dep y --factor g [--html out.html]
 ";
 
 enum CliError {
@@ -38,15 +38,15 @@ fn usage<T>(m: impl Into<String>) -> Res<T> {
 }
 
 struct Args {
-    csv: String,
+    file: String,
     opts: HashMap<String, String>,
 }
 
 fn parse_args(rest: &[String]) -> Res<Args> {
     let mut it = rest.iter();
-    let csv = match it.next() {
+    let file = match it.next() {
         Some(c) if !c.starts_with("--") => c.clone(),
-        _ => return usage("missing <csv> argument"),
+        _ => return usage("missing <file> argument"),
     };
     let mut opts = HashMap::new();
     while let Some(k) = it.next() {
@@ -58,7 +58,7 @@ fn parse_args(rest: &[String]) -> Res<Args> {
         };
         opts.insert(name.to_string(), v.clone());
     }
-    Ok(Args { csv, opts })
+    Ok(Args { file, opts })
 }
 
 impl Args {
@@ -103,8 +103,8 @@ fn run(args: &[String]) -> Res<()> {
         return usage(format!("unknown subcommand: {cmd}"));
     }
     let a = parse_args(&args[1..])?;
-    let mut ds = load_csv(std::path::Path::new(&a.csv))
-        .map_err(|e| CliError::Io(format!("cannot read {}: {e}", a.csv)))?;
+    let mut ds = sav_io::open_any(std::path::Path::new(&a.file))
+        .map_err(|e| CliError::Io(format!("cannot read {}: {e}", a.file)))?;
     let items: Vec<OutputItem> = match cmd.as_str() {
         "regression" => {
             let dependent = var(&ds, a.req("dep")?)?;

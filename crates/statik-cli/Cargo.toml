@@ -5,5 +5,6 @@ edition.workspace = true
 
 [dependencies]
 dataset = { path = "../dataset" }
+sav-io = { path = "../sav-io" }
 output-model = { path = "../output-model" }
 procedures = { path = "../procedures" }

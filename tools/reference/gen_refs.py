@@ -473,6 +473,29 @@ def write_sav_fixtures():
     (REF / "sav_basic.json").write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def write_import_fixtures():
+    """CSV/XLSX import fixtures (plan 2, task 3)."""
+    # Indonesian-locale Excel: UTF-8 BOM, ';' separator, ',' decimals, CRLF.
+    indo = ("Jenis Kelamin;Nilai Ujian;Umur\r\n"
+            "1;78,5;20\r\n2;82,25;21\r\n1;90;19\r\n2;65,75;22\r\n1;;20\r\n")
+    (DATA / "indo_semicolon.csv").write_bytes(b"\xef\xbb\xbf" + indo.encode("utf-8"))
+    # Empty, duplicate, digit-leading and over-long (70 characters) headers.
+    messy = ("," + "Nama,Nama,1abc," + "a" * 70 + "\n"
+             "1,Ani,x,5,2.5\n2,Budi,y,6,3\n")
+    (DATA / "messy_headers.csv").write_bytes(messy.encode("utf-8"))
+    # sample.xlsx: sheet "Data" (numbers, text, a date column) and sheet "Kosong" (empty cells).
+    data = pd.DataFrame({
+        "Jenis Kelamin": [1, 2, 1, 2],
+        "Nama": ["Ani", "Budi", "Citra", "Dewi"],
+        "Nilai": [78.5, 82.25, 90.0, 65.75],
+        "Tanggal": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]),
+    })
+    kosong = pd.DataFrame({"a": [1.0, None, 3.0], "b": ["x", "y", None], "c": [10.5, 20.0, 30.25]})
+    with pd.ExcelWriter(DATA / "sample.xlsx", engine="openpyxl") as xw:
+        data.to_excel(xw, sheet_name="Data", index=False)
+        kosong.to_excel(xw, sheet_name="Kosong", index=False)
+
+
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
     REF.mkdir(parents=True, exist_ok=True)
@@ -482,6 +505,7 @@ def main():
         out = fn()
         (REF / f"{out['case']}.json").write_text(json.dumps(out, indent=2) + "\n")
     write_sav_fixtures()
+    write_import_fixtures()
 
 
 if __name__ == "__main__":
