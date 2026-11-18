@@ -71,3 +71,16 @@ fn ordered_value_negative_zero_is_zero() {
     assert_eq!(m.get(&OrderedValue(-0.0)), Some(&"Nol"));
     assert!(OrderedValue(-1.0) < OrderedValue(-0.0));
 }
+
+/// SPSS limits names to 64 bytes (UTF-8), not 64 characters; reserved words are not names.
+#[test]
+fn name_length_is_counted_in_bytes_and_reserved_words_are_rejected() {
+    assert!(validate_name(&"a".repeat(64)).is_ok());
+    assert!(validate_name(&"é".repeat(32)).is_ok()); // 64 bytes
+    assert!(validate_name(&"é".repeat(33)).is_err()); // 33 chars, 66 bytes
+    for w in ["ALL", "and", "By", "EQ", "ge", "GT", "le", "LT", "ne", "NOT", "or", "TO", "with"] {
+        assert!(validate_name(w).is_err(), "{w}");
+    }
+    assert!(validate_name("andy").is_ok());
+    assert!(is_reserved_word("with") && !is_reserved_word("withx"));
+}

@@ -12,6 +12,8 @@ pub enum DatasetError {
     TypeMismatch,
     #[error("index out of range: {0}")]
     OutOfRange(usize),
+    #[error("invalid string width {0} (must be 1 to 32767 bytes)")]
+    InvalidWidth(usize),
     #[error("csv error: {0}")]
     Csv(String),
     #[error("io error: {0}")]
@@ -43,9 +45,27 @@ pub struct VarId(pub usize);
 pub struct Dataset {
     vars: Vec<Variable>,
     cols: Vec<Column>,
+    /// Name of the weight variable (as in a `.sav` header). Statik's analyses ignore it.
+    weight: Option<String>,
+    /// File label (`.sav` header).
+    file_label: Option<String>,
+    /// Document lines (`.sav` record 6).
+    documents: Vec<String>,
 }
 
-/// SPSS-style: starts with a letter, then letters/digits/`_`/`.`/`$`/`#`/`@`, max 64 chars.
+/// Longest variable name SPSS accepts, in UTF-8 bytes.
+pub const MAX_NAME_BYTES: usize = 64;
+
+/// SPSS reserved words, which are never valid variable names.
+pub const RESERVED_WORDS: [&str; 13] = ["ALL", "AND", "BY", "EQ", "GE", "GT", "LE", "LT", "NE", "NOT", "OR", "TO", "WITH"];
+
+/// `name` is an SPSS reserved word (case-insensitive).
+pub fn is_reserved_word(name: &str) -> bool {
+    RESERVED_WORDS.iter().any(|w| w.eq_ignore_ascii_case(name))
+}
+
+/// SPSS-style: starts with a letter, then letters/digits/`_`/`.`/`$`/`#`/`@`, at most 64 bytes
+/// (UTF-8), and not a reserved word (`ALL`, `AND`, `BY`, ...).
 pub fn validate_name(name: &str) -> Result<(), DatasetError> {
     let bad = || Err(DatasetError::InvalidName(name.to_string()));
     let mut chars = name.chars();
@@ -53,11 +73,25 @@ pub fn validate_name(name: &str) -> Result<(), DatasetError> {
         Some(c) if c.is_alphabetic() => {}
         _ => return bad(),
     }
-    if name.chars().count() > 64 {
+    if name.len() > MAX_NAME_BYTES || is_reserved_word(name) {
         return bad();
     }
     if chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '#' | '@')) { Ok(()) } else { bad() }
 }
+
+/// Longest prefix of `s` that is at most `max` bytes, cut on a character boundary.
+pub fn truncate_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+const MAX_STRING_WIDTH: usize = 32767;
 
 impl Dataset {
     pub fn new() -> Self {
@@ -153,9 +187,72 @@ impl Dataset {
         if id.0 >= self.vars.len() {
             return Err(DatasetError::OutOfRange(id.0));
         }
+        if self.weight() == Some(id) {
+            self.weight = None;
+        }
         self.vars.remove(id.0);
         self.cols.remove(id.0);
         Ok(())
+    }
+
+    /// The weight variable kept from a `.sav` file, if any. Statik's analyses are unweighted.
+    pub fn weight(&self) -> Option<VarId> {
+        let id = self.find(self.weight.as_deref()?)?;
+        matches!(self.vars[id.0].var_type, VarType::Numeric).then_some(id)
+    }
+
+    /// Set or clear the weight variable; it must be numeric.
+    pub fn set_weight(&mut self, id: Option<VarId>) -> Result<(), DatasetError> {
+        self.weight = match id {
+            None => None,
+            Some(id) => {
+                let v = self.vars.get(id.0).ok_or(DatasetError::OutOfRange(id.0))?;
+                if !matches!(v.var_type, VarType::Numeric) {
+                    return Err(DatasetError::TypeMismatch);
+                }
+                Some(v.name.clone())
+            }
+        };
+        Ok(())
+    }
+
+    pub fn file_label(&self) -> Option<&str> {
+        self.file_label.as_deref()
+    }
+
+    pub fn set_file_label(&mut self, label: Option<String>) {
+        self.file_label = label;
+    }
+
+    /// Document lines (SPSS "DOCUMENT" text).
+    pub fn documents(&self) -> &[String] {
+        &self.documents
+    }
+
+    pub fn set_documents(&mut self, lines: Vec<String>) {
+        self.documents = lines;
+    }
+
+    /// Change the storage width (bytes) of a string variable. Values longer than `width` are cut
+    /// on a character boundary; returns how many were cut. The display width is not changed.
+    pub fn set_string_width(&mut self, id: VarId, width: usize) -> Result<usize, DatasetError> {
+        let var = self.vars.get_mut(id.0).ok_or(DatasetError::OutOfRange(id.0))?;
+        let Column::Text(vals) = &mut self.cols[id.0] else {
+            return Err(DatasetError::TypeMismatch);
+        };
+        if width == 0 || width > MAX_STRING_WIDTH {
+            return Err(DatasetError::InvalidWidth(width));
+        }
+        let mut cut = 0;
+        for s in vals.iter_mut() {
+            if s.len() > width {
+                let keep = truncate_bytes(s, width).len();
+                s.truncate(keep);
+                cut += 1;
+            }
+        }
+        var.var_type = VarType::String { width };
+        Ok(cut)
     }
 
     pub fn rename_variable(&mut self, id: VarId, new_name: &str) -> Result<(), DatasetError> {
@@ -165,6 +262,9 @@ impl Dataset {
         validate_name(new_name)?;
         if self.find(new_name).is_some_and(|other| other != id) {
             return Err(DatasetError::DuplicateName(new_name.to_string()));
+        }
+        if self.weight() == Some(id) {
+            self.weight = Some(new_name.to_string());
         }
         self.vars[id.0].name = new_name.to_string();
         Ok(())
@@ -227,40 +327,62 @@ impl Dataset {
         }
     }
 
-    /// Convert a variable's type, converting values. Numeric -> String formats each value
-    /// with the variable's decimals ("" for NaN; width = max(8, longest)). String -> Numeric
-    /// parses the trimmed text (failure / non-finite -> NaN). Value labels and missing
-    /// specs are reset; a same-type call is a no-op.
-    pub fn set_type(&mut self, id: VarId, t: VarType) -> Result<(), DatasetError> {
+    /// Convert a variable's type, converting values, and return how many values were lost.
+    ///
+    /// - Numeric -> String formats each value with the variable's decimals ("" for NaN). The
+    ///   storage width is the requested one, raised to the longest value (and at least 8) so no
+    ///   text is cut. Returns 0.
+    /// - String -> Numeric parses the trimmed text (failure / non-finite -> NaN). Returns the
+    ///   number of non-blank cells that could not be parsed and became system-missing.
+    /// - String -> String changes the storage width like [`Dataset::set_string_width`] and
+    ///   returns the number of values cut.
+    ///
+    /// On a type change value labels, missing specs and the kept `.sav` format are reset (and
+    /// the weight is cleared if this was the weight variable); Numeric -> Numeric is a no-op.
+    pub fn set_type(&mut self, id: VarId, t: VarType) -> Result<usize, DatasetError> {
         let Some(var) = self.vars.get(id.0) else {
             return Err(DatasetError::OutOfRange(id.0));
         };
-        match (&self.cols[id.0], t) {
-            (Column::Numeric(v), VarType::String { .. }) => {
+        let was_weight = self.weight() == Some(id);
+        let lost = match (&self.cols[id.0], t) {
+            (Column::Numeric(v), VarType::String { width: asked }) => {
                 let dec = var.decimals;
                 let text: Vec<String> = v
                     .iter()
                     .map(|&x| if x.is_nan() { String::new() } else { format!("{:.*}", dec, x + 0.0) })
                     .collect();
-                let width = text.iter().map(|s| s.chars().count()).max().unwrap_or(0).max(8);
-                let mut nv = Variable::string(&var.name, width);
+                let longest = text.iter().map(String::len).max().unwrap_or(0).max(8);
+                let mut nv = Variable::string(&var.name, asked.max(longest).min(MAX_STRING_WIDTH));
                 nv.label = var.label.clone();
                 self.vars[id.0] = nv;
                 self.cols[id.0] = Column::Text(text);
+                0
             }
             (Column::Text(v), VarType::Numeric) => {
+                let mut lost = 0;
                 let nums: Vec<f64> = v
                     .iter()
-                    .map(|s| s.trim().parse::<f64>().ok().filter(|x| x.is_finite()).map_or(f64::NAN, |x| x + 0.0))
+                    .map(|s| match s.trim().parse::<f64>().ok().filter(|x| x.is_finite()) {
+                        Some(x) => x + 0.0,
+                        None => {
+                            lost += usize::from(!s.trim().is_empty());
+                            f64::NAN
+                        }
+                    })
                     .collect();
                 let mut nv = Variable::numeric(&var.name);
                 nv.label = var.label.clone();
                 self.vars[id.0] = nv;
                 self.cols[id.0] = Column::Numeric(nums);
+                lost
             }
-            _ => {}
+            (Column::Text(_), VarType::String { width }) => return self.set_string_width(id, width),
+            (Column::Numeric(_), VarType::Numeric) => return Ok(0),
+        };
+        if was_weight {
+            self.weight = None;
         }
-        Ok(())
+        Ok(lost)
     }
 
     /// `prefix` + smallest n >= 1 such that the name is unused.

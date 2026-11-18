@@ -4,5 +4,7 @@ mod dataset;
 mod variable;
 
 pub use csv_load::load_csv;
-pub use dataset::{validate_name, Column, Dataset, DatasetError, VarId};
+pub use dataset::{
+    is_reserved_word, truncate_bytes, validate_name, Column, Dataset, DatasetError, VarId, MAX_NAME_BYTES, RESERVED_WORDS,
+};
 pub use variable::{Measure, MissingSpec, OrderedValue, VarType, Variable};

@@ -66,13 +66,33 @@ impl Ord for OrderedValue {
 pub struct Variable {
     pub name: String,
     pub label: Option<String>,
+    /// Storage type. For strings, `VarType::String { width }` is the storage width in bytes and
+    /// the single source of truth for it (change it with `Dataset::set_string_width`).
     pub var_type: VarType,
+    /// Display width (like SPSS "Columns"). For numeric variables it is also the width of the
+    /// print format (`F8.2` has width 8); it never limits what a string variable can hold.
     pub width: usize,
     pub decimals: usize,
     pub value_labels: BTreeMap<OrderedValue, String>,
     pub missing: MissingSpec,
     pub measure: Measure,
+    /// SPSS print/write format type of a numeric variable read from a `.sav` file when it is not
+    /// plain `F` (e.g. 20 = DATE, 23 = ADATE, 4 = DOLLAR, 3 = COMMA). Kept so a save writes it back
+    /// unchanged; Statik itself shows the value as a plain number. `None` means `F`.
+    pub format_type: Option<u8>,
+    /// Value labels of a string variable (value text -> label). Kept for `.sav` round trips;
+    /// Statik's analyses only use numeric variables.
+    pub string_value_labels: BTreeMap<String, String>,
+    /// Discrete user-missing values of a string variable (at most 3, each at most 8 bytes in a
+    /// `.sav` file). Kept for round trips; string variables are never missing in Statik analyses.
+    pub string_missing: Vec<String>,
 }
+
+/// SPSS format type codes that hold a date (or date and time) as seconds since 1582-10-14:
+/// DATE, DATETIME, ADATE, JDATE, MOYR, QYR, WKYR, EDATE, SDATE, YMDHMS.
+const DATE_FORMATS: [u8; 10] = [20, 22, 23, 24, 28, 29, 30, 38, 39, 41];
+/// SPSS format type codes that hold a duration in seconds: TIME, DTIME, MTIME.
+const TIME_FORMATS: [u8; 3] = [21, 25, 40];
 
 impl Variable {
     /// Numeric scale variable with SPSS-like defaults (width 8, 2 decimals).
@@ -86,7 +106,20 @@ impl Variable {
             value_labels: BTreeMap::new(),
             missing: MissingSpec::None,
             measure: Measure::Scale,
+            format_type: None,
+            string_value_labels: BTreeMap::new(),
+            string_missing: Vec::new(),
         }
+    }
+
+    /// The format kept from a `.sav` file is a date / date-time format.
+    pub fn has_date_format(&self) -> bool {
+        self.format_type.is_some_and(|t| DATE_FORMATS.contains(&t))
+    }
+
+    /// The format kept from a `.sav` file is a time / duration format.
+    pub fn has_time_format(&self) -> bool {
+        self.format_type.is_some_and(|t| TIME_FORMATS.contains(&t))
     }
 
     pub fn string(name: &str, width: usize) -> Self {
