@@ -41,6 +41,6 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **One-sided p** is the two-sided p divided by 2 (for the correlation as well), shown regardless of the sign of t.
 - **Missing values:** One-Sample and Independent exclude analysis by analysis (the SPSS default); Paired excludes per pair. "Exclude cases listwise" is not implemented.
 - **Warnings:** a variable/pair with sd 0 (or a constant difference) keeps its statistics table but gets the warning "t cannot be computed because the standard deviation is 0." instead of a test row. The wording of the other warnings (fewer than 2 cases, empty group) is SPSS-like but not verified.
-- **Paired correlation** is omitted together with the test when the differences are constant, even though SPSS would still print it. Correlation with a constant variable shows ".".
+- **Paired correlation** shows "." when either variable is constant; it is still printed when only the differences are constant.
 - **Group labels** in Group Statistics use the value label, else the group value with the grouping variable's decimals. SPSS's "Group 1 / Group 2" cut-point option is not implemented.
 - **Header footnotes:** none are attached.
