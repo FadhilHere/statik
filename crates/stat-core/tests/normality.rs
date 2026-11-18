@@ -58,6 +58,9 @@ fn too_small_or_degenerate_samples() {
     assert!(shapiro_wilk(&(0..5000).map(f64::from).collect::<Vec<_>>()).is_some());
     assert!(lilliefors(&[1.0, 2.0, 3.0, 4.0]).is_none());
     assert!(lilliefors(&[3.0; 6]).is_none(), "sd = 0");
+    // Mean of six 0.1 rounds to 0.10000000000000002, leaving sd ≈ 1.5e-17: still constant.
+    assert!(lilliefors(&[0.1; 6]).is_none(), "constant with rounding in the mean");
+    assert!(shapiro_wilk(&[0.1; 6]).is_none());
     assert!(lilliefors(&[1.0, 2.0, 3.0, 4.0, 9.0]).is_some());
 }
 

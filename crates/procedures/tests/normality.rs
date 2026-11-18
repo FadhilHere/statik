@@ -232,6 +232,21 @@ fn npar_ks_constant_warns() {
     assert_eq!(warnings(&items).len(), 1);
     assert_eq!(table(&items, "One-Sample Kolmogorov-Smirnov Test").col_headers.len(), 1);
 
+    // Constant whose computed sd is a tiny non-zero number (rounding in the mean).
+    let ds = small_ds(&[("v", vec![0.1; 6])]);
+    let items = run_npar_ks(&ds, &NparKsOptions { vars: vec![VarId(0)] });
+    let w = warnings(&items);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].contains("constant"), "{}", w[0]);
+    assert!(tables(&items).is_empty());
+
+    // Huge values: sd overflows to infinity; the message must not claim the variable is constant.
+    let ds = small_ds(&[("v", vec![-1e308, 1e308, 0.0, 1.0, 2.0])]);
+    let items = run_npar_ks(&ds, &NparKsOptions { vars: vec![VarId(0)] });
+    let w = warnings(&items);
+    assert_eq!(w.len(), 1);
+    assert!(!w[0].contains("constant") && w[0].contains("not finite"), "{}", w[0]);
+
     // Too few cases.
     let ds = small_ds(&[("v", vec![1.0, 2.0, 4.0])]);
     let items = run_npar_ks(&ds, &NparKsOptions { vars: vec![VarId(0)] });

@@ -25,8 +25,10 @@ pub fn run_npar_ks(ds: &Dataset, opt: &NparKsOptions) -> Vec<OutputItem> {
         let Some(ks) = lilliefors(&x) else {
             let why = if x.len() < 5 {
                 format!("has fewer than 5 valid cases ({})", x.len())
-            } else {
+            } else if x.iter().all(|&v| v == x[0]) {
                 "is constant (standard deviation is zero)".to_string()
+            } else {
+                "has a standard deviation that is not finite".to_string()
             };
             out.extend(warning(format!(
                 "NPar Tests: variable {} {why}. The Kolmogorov-Smirnov test cannot be computed; it has been omitted.",

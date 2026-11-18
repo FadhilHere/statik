@@ -43,10 +43,11 @@ fn dallal_wilkinson(d: f64, n: usize) -> f64 {
 }
 
 /// One-sample K-S test for normality with mean and sd (n − 1) estimated from the sample
-/// (Lilliefors). `None` when n < 5 or the standard deviation is zero / not finite.
+/// (Lilliefors). `None` when n < 5, the data are constant (max == min; rounding in the mean can
+/// leave a tiny non-zero sd) or the standard deviation is zero / not finite.
 pub fn lilliefors(x: &[f64]) -> Option<KsResult> {
     let n = x.len();
-    if n < 5 {
+    if n < 5 || x.iter().all(|&v| v == x[0]) {
         return None;
     }
     let nf = n as f64;
