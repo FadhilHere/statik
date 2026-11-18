@@ -83,3 +83,13 @@ fn nested_headers() {
     let txt = render_text(&[OutputItem::Table(t)]);
     assert!(txt.contains("Grup"));
 }
+
+#[test]
+fn regressions_count_text_rounding() {
+    assert_eq!(format_cell(&num(-0.4, CellFormat::Count)), "0");
+    assert_eq!(format_cell(&num(f64::INFINITY, CellFormat::Text)), ".");
+    assert_eq!(format_cell(&num(f64::NAN, CellFormat::Text)), ".");
+    assert_eq!(format_cell(&num(f64::NEG_INFINITY, CellFormat::Text)), ".");
+    assert_eq!(format_cell(&num(-2.5, CellFormat::Fixed(0))), "-3");
+    assert_eq!(format_cell(&num(0.0005, CellFormat::Sig)), ".001");
+}

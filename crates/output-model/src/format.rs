@@ -28,16 +28,17 @@ pub fn format_cell(c: &Cell) -> String {
             CellFormat::Sig => fixed(*v, 3),
             CellFormat::Count => {
                 if v.is_finite() {
-                    format!("{:.0}", v.round())
+                    let r = v.round();
+                    if r == 0.0 { "0".to_string() } else { format!("{:.0}", r) }
                 } else {
                     ".".to_string()
                 }
             }
             CellFormat::Text => {
-                if v.is_nan() {
-                    ".".to_string()
-                } else {
+                if v.is_finite() {
                     v.to_string()
+                } else {
+                    ".".to_string()
                 }
             }
         },
