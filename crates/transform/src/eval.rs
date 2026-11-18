@@ -244,6 +244,15 @@ impl Node {
             Node::Arith(op, l, r) => {
                 let (a, b) = (l.eval(ds, row), r.eval(ds, row));
                 if a.is_nan() || b.is_nan() {
+                    // SPSS: 0 * missing = missing * 0 = 0 and 0 / missing = 0 (a valid exact zero).
+                    let zero = match op {
+                        Op::Mul => a == 0.0 || b == 0.0,
+                        Op::Div => a == 0.0,
+                        _ => false,
+                    };
+                    if zero {
+                        return 0.0;
+                    }
                     return f64::NAN;
                 }
                 finite(match op {

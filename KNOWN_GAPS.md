@@ -71,3 +71,10 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **Names:** invalid characters become `_`, a non-letter start gets a `V` prefix, names are cut to 64 characters, empty headers become `VAR00001`, ... (first free number, not the column position) and duplicates (case-insensitive) get `_1`, `_2`. The original header is kept as the variable label when the name differs. SPSS reserved words are not changed. Text cells are not trimmed, except trailing spaces at the end of an unquoted line.
 - **XLSX:** date and date-time cells are imported as Excel serial numbers (numeric, no date format, so they show as plain numbers; the 1900/1904 base is taken from the file). Booleans become the text TRUE/FALSE, error cells are empty, a column mixing numbers and text becomes a string variable (numbers are written as the spreadsheet shows them without trailing `.0`). Formulas are read as their cached values. Only the first sheet or the one named is read; the used range starts at the first non-empty cell. `.xls`/`.ods` are opened by `open_any` too (untested).
 - **Decimal comma is file-wide:** it is decided once per file, so a `;` file mixing `1,234` thousands-style columns with `78.5` columns turns the columns that do not fit that choice into text (set the option explicitly to override). A file with one column and no delimiter is read as a single column (so `78,5` is 78.5). Import errors read "CSV tidak valid: ..." / "XLSX tidak valid: ..."; an unknown extension is `UnknownType`.
+
+## Compute Variable (plan 2, Task 4)
+
+- **Logical operands other than 0/1:** in AND, OR, NOT and IF conditions, any non-missing non-zero value counts as true. This has not been checked against SPSS. PSPP treats such values as missing.
+- **LAG of a user-missing value** returns system-missing. It is unverified whether SPSS passes the raw value through instead.
+- Not implemented: RND/TRUNC fuzzbits argument (default 6 bits is applied), LAG(x, n), string functions, and string targets.
+- Expressions are limited to 64 levels of nesting (parentheses, calls, unary operators) and a tree depth of 256; deeper expressions are a syntax error.

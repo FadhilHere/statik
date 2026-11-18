@@ -57,9 +57,9 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Maximum nesting of parentheses / calls / unary operators (bounds parser recursion).
-const MAX_NESTING: usize = 200;
+const MAX_NESTING: usize = 64;
 /// Maximum depth of the resulting tree (bounds evaluation recursion, e.g. `1+1+1+...`).
-const MAX_DEPTH: usize = 500;
+const MAX_DEPTH: usize = 256;
 
 /// Parse an expression.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
@@ -268,7 +268,7 @@ impl Parser {
                 } else {
                     arg
                 };
-                depth = depth.max(d + 1);
+                depth = depth.max(d);
                 args.push(arg);
                 if self.peek_tok() == Some(&Tok::Comma) {
                     self.i += 1;
@@ -288,6 +288,9 @@ impl Parser {
                 None => format!("at least {min} argument{}", if min == 1 { "" } else { "s" }),
             };
             return self.err(name_pos, format!("Function {fname} expects {want}, got {n}"));
+        }
+        if depth + 1 > MAX_DEPTH {
+            return self.err(name_pos, "Expression is too complex");
         }
         Ok((Expr::Call(name.to_uppercase(), args), depth + 1))
     }

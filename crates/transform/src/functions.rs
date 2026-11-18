@@ -152,6 +152,10 @@ fn trunc(x: f64, mult: f64) -> f64 {
 
 /// Scalar functions (ABS .. MOD). Any missing (NaN) argument gives NaN; so do domain errors.
 pub(crate) fn scalar(func: Func, args: &[f64]) -> f64 {
+    // SPSS: MOD(0, missing) = 0.
+    if func == Func::Mod && args.first() == Some(&0.0) && args.get(1).is_some_and(|b| b.is_nan()) {
+        return 0.0;
+    }
     if args.iter().any(|a| a.is_nan()) {
         return f64::NAN;
     }

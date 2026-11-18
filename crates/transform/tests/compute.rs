@@ -380,20 +380,42 @@ fn deep_nesting_is_an_error_not_a_crash() {
     assert!(parse(&chain).is_err());
     let pow = vec!["1"; 100_000].join("**");
     assert!(parse(&pow).is_err());
-    // Nesting just inside the limits works, even on a 1 MB stack (the Windows main thread).
-    let on_small_stack = |f: fn()| std::thread::Builder::new().stack_size(1 << 20).spawn(f).unwrap().join().unwrap();
-    on_small_stack(|| {
-        let parens = format!("{}1{}", "(".repeat(200), ")".repeat(200));
-        assert_eq!(eval1(&parens), 1.0);
-        let sum = vec!["1"; 500].join("+");
-        assert_eq!(eval1(&sum), 500.0);
-        let neg = format!("{}1", "-".repeat(200));
-        assert_eq!(eval1(&neg), 1.0);
-        let mixed = format!("{}{}{}", "ABS(".repeat(199), vec!["1"; 300].join("+"), ")".repeat(199));
-        assert_eq!(eval1(&mixed), 300.0);
-    });
-    assert!(parse(&format!("{}1{}", "(".repeat(201), ")".repeat(201))).is_err());
-    assert!(parse(&vec!["1"; 502].join("+")).is_err());
+    // Worst cases just inside the limits (nesting 64, tree depth 256) work on a 1 MB stack
+    // (the Windows main thread) and, for headroom, on 512 KB.
+    for stack in [1 << 20, 512 << 10] {
+        std::thread::Builder::new().stack_size(stack).spawn(worst_cases_at_limits).unwrap().join().unwrap();
+    }
+}
+
+/// Every parser level per nesting step (2 nesting levels and 7 tree levels per repeat).
+fn worst_parse_shape(reps: usize) -> String {
+    format!("{}1{}", "1 OR 1 AND 1 = 1 + 1 * 1 ** -(".repeat(reps), ")".repeat(reps))
+}
+
+/// Deepest call nesting around the longest comparison chain (bind/eval worst case).
+fn worst_bind_shape(calls: usize, terms: usize) -> String {
+    format!("{}{}{}", "ABS(".repeat(calls), vec!["1"; terms].join(" = "), ")".repeat(calls))
+}
+
+fn worst_cases_at_limits() {
+    assert_eq!(eval1(&worst_parse_shape(32)), 1.0);
+    assert_eq!(eval1(&worst_bind_shape(63, 193)), 1.0);
+    assert_eq!(eval1(&format!("{}1{}", "(".repeat(64), ")".repeat(64))), 1.0);
+    assert_eq!(eval1(&vec!["1"; 256].join("+")), 256.0);
+    assert_eq!(eval1(&format!("{}1", "-".repeat(64))), 1.0);
+    // One step over each limit is a ParseError, not a crash.
+    let mut ds = ds_with(&[("x", vec![1.0])]);
+    for src in [
+        worst_parse_shape(33),
+        worst_bind_shape(63, 194),
+        worst_bind_shape(65, 1),
+        format!("{}1{}", "(".repeat(65), ")".repeat(65)),
+        vec!["1"; 257].join("+"),
+        format!("{}1", "-".repeat(65)),
+    ] {
+        assert!(parse(&src).is_err(), "{src}");
+        assert!(matches!(compute(&mut ds, &spec("z", &src)), Err(TransformError::Parse(_))));
+    }
 }
 
 #[test]
@@ -427,4 +449,38 @@ fn garbage_input_never_panics() {
     for src in ["\u{FEFF}x", "x\u{200B}", "ｘ", "1\u{2212}2", "'\u{1F600}'", "MEAN(x TO", "MEAN(x TO 1)", "LAG(1)"] {
         let _ = compute(&mut ds, &spec("g", src));
     }
+}
+
+// ---------- review fixes ----------
+
+#[test]
+fn condition_error_position_counts_leading_whitespace() {
+    let mut ds = ds_with(&[("x", vec![1.0])]);
+    let s = ComputeSpec { condition: Some("   1 +".into()), ..spec("z", "1") };
+    match compute(&mut ds, &s).unwrap_err() {
+        TransformError::ConditionParse(p) => assert_eq!(p.pos, 6),
+        e => panic!("{e:?}"),
+    }
+    // A blank condition still means "all cases".
+    let s = ComputeSpec { condition: Some("  ".into()), ..spec("z", "1") };
+    compute(&mut ds, &s).unwrap();
+    assert_eq!(col(&ds, "z"), vec![1.0]);
+}
+
+#[test]
+fn spss_zero_times_missing_is_zero() {
+    let mut ds = ds_with(&[("z0", vec![0.0, 0.0, 2.0, NAN, -0.0]), ("m", vec![NAN, 99.0, NAN, NAN, NAN])]);
+    let m = ds.find("m").unwrap();
+    ds.var_mut(m).missing = MissingSpec::Discrete(vec![99.0]);
+    for (name, src) in [("a", "z0 * m"), ("b", "m * z0"), ("c", "z0 / m"), ("d", "MOD(z0, m)"), ("e", "m / z0")] {
+        compute(&mut ds, &spec(name, src)).unwrap();
+    }
+    same(&col(&ds, "a"), &[0.0, 0.0, NAN, NAN, 0.0]);
+    same(&col(&ds, "b"), &[0.0, 0.0, NAN, NAN, 0.0]);
+    same(&col(&ds, "c"), &[0.0, 0.0, NAN, NAN, 0.0]);
+    same(&col(&ds, "d"), &[0.0, 0.0, NAN, NAN, 0.0]);
+    same(&col(&ds, "e"), &[NAN, NAN, NAN, NAN, NAN]);
+    assert!(eval1("0/0").is_nan());
+    assert!(eval1("MOD(0, 0)").is_nan());
+    assert_eq!(eval1("0 * 5"), 0.0);
 }

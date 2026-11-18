@@ -80,8 +80,9 @@ pub fn compute(ds: &mut Dataset, spec: &ComputeSpec) -> Result<ComputeReport, Tr
 
     let expr = parse(&spec.expression).map_err(TransformError::Parse)?;
     let node = bind(ds, &expr)?;
-    let cond: Option<Node> = match spec.condition.as_deref().map(str::trim) {
-        Some(c) if !c.is_empty() => Some(bind(ds, &parse(c).map_err(TransformError::ConditionParse)?)?),
+    // Parse the untrimmed text so error positions match what the user typed.
+    let cond: Option<Node> = match spec.condition.as_deref() {
+        Some(c) if !c.trim().is_empty() => Some(bind(ds, &parse(c).map_err(TransformError::ConditionParse)?)?),
         _ => None,
     };
 
