@@ -141,8 +141,41 @@ def case_normality():
     return {"case": "normality", "values": values}
 
 
+def case_ttest():
+    from scipy import stats
+
+    sk = pd.read_csv(DATA / "skripsi60.csv")
+    x1 = sk["x1"].to_numpy(dtype=float)
+    g1 = sk.loc[sk["grp"] == 1, "x1"].to_numpy(dtype=float)
+    g2 = sk.loc[sk["grp"] == 2, "x1"].to_numpy(dtype=float)
+    x2 = sk["x2"].to_numpy(dtype=float)
+    one = stats.ttest_1samp(x1, 50.0)
+    ci1 = one.confidence_interval(0.95)
+    lev = stats.levene(g1, g2, center="mean")
+    eq = stats.ttest_ind(g1, g2, equal_var=True)
+    we = stats.ttest_ind(g1, g2, equal_var=False)
+    pr = stats.ttest_rel(x1, x2)
+    corr = stats.pearsonr(x1, x2)
+    return {
+        "case": "ttest",
+        "values": {
+            "x1": [float(v) for v in x1],
+            "g1": [float(v) for v in g1],
+            "g2": [float(v) for v in g2],
+            "x2": [float(v) for v in x2],
+            "one_t": float(one.statistic), "one_df": float(one.df), "one_p": float(one.pvalue),
+            "one_ci": [float(ci1.low), float(ci1.high)],
+            "levene_f": float(lev.statistic), "levene_p": float(lev.pvalue),
+            "eq_t": float(eq.statistic), "eq_df": float(eq.df), "eq_p": float(eq.pvalue),
+            "welch_t": float(we.statistic), "welch_df": float(we.df), "welch_p": float(we.pvalue),
+            "paired_t": float(pr.statistic), "paired_df": float(pr.df), "paired_p": float(pr.pvalue),
+            "corr": float(corr.statistic), "corr_p": float(corr.pvalue),
+        },
+    }
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality]
+CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality, case_ttest]
 
 
 def main():
