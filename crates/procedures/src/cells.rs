@@ -48,3 +48,20 @@ pub(crate) const LOWER_BOUND_NOTE: &str = "This is a lower bound of the true sig
 pub(crate) fn fixed_plus(decimals: usize, extra: usize) -> CellFormat {
     CellFormat::Fixed((decimals + extra).min(16) as u8)
 }
+
+/// Header node with arbitrary child nodes.
+pub(crate) fn parent(s: &str, children: Vec<HeaderNode>) -> HeaderNode {
+    HeaderNode { label: s.to_string(), children }
+}
+
+/// "Significance" header with One-Sided p / Two-Sided p sub-columns (SPSS 27+).
+pub(crate) fn sig_header() -> HeaderNode {
+    group("Significance", &["One-Sided p", "Two-Sided p"])
+}
+
+/// df cell: a count for integer df, three decimals otherwise (Welch).
+pub(crate) fn df_cell(df: f64) -> Cell {
+    if df.fract() == 0.0 { num(df, CellFormat::Count) } else { num(df, CellFormat::Fixed(3)) }
+}
+
+pub(crate) const SD_ZERO_MSG: &str = "t cannot be computed because the standard deviation is 0.";

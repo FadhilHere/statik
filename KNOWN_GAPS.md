@@ -34,3 +34,13 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
   - 1-Sample K-S omits a constant variable, or one with fewer than 5 cases, and adds a warning.
   - The warning wording is SPSS-like but not verified.
 - Shapiro-Wilk for 4 ≤ n ≤ 11 returns p = 1e-99 when log(1 − W) ≥ γ, as AS R94 does. scipy returns NaN in that case.
+
+## t tests (One-Sample, Independent, Paired)
+
+- **Decimals — unverified, check against a user's screenshot.** Mean, Mean Difference and CI bounds use variable decimals + 2 (paired differences use the larger of the two variables' decimals). Std. Deviation, Std. Error Mean and Std. Error Difference use + 3. t, F and Correlation use `Fixed(3)`; df is a count, or `Fixed(3)` for Welch df. Sig. / p use the Sig format.
+- **One-sided p** is the two-sided p divided by 2 (for the correlation as well), shown regardless of the sign of t.
+- **Missing values:** One-Sample and Independent exclude analysis by analysis (the SPSS default); Paired excludes per pair. "Exclude cases listwise" is not implemented.
+- **Warnings:** a variable/pair with sd 0 (or a constant difference) keeps its statistics table but gets the warning "t cannot be computed because the standard deviation is 0." instead of a test row. The wording of the other warnings (fewer than 2 cases, empty group) is SPSS-like but not verified.
+- **Paired correlation** is omitted together with the test when the differences are constant, even though SPSS would still print it. Correlation with a constant variable shows ".".
+- **Group labels** in Group Statistics use the value label, else the group value with the grouping variable's decimals. SPSS's "Group 1 / Group 2" cut-point option is not implemented.
+- **Header footnotes:** none are attached.
