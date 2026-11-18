@@ -137,3 +137,42 @@ fn multiple_pairs() {
     assert_eq!(ids.len(), 2);
     assert!(same(ds.numeric(ids[1]), &[5.0, 2.0]));
 }
+
+fn var_names(ds: &Dataset) -> Vec<String> {
+    (0..ds.n_vars()).map(|i| ds.var(VarId(i)).name.clone()).collect()
+}
+
+/// Output names that differ only in non-ASCII case are duplicates (as `Dataset::find` sees
+/// them): the recode fails and the dataset is unchanged.
+#[test]
+fn non_ascii_case_duplicate_outputs_leave_dataset_unchanged() {
+    let mut ds = ds_with(vec![1.0, 2.0], MissingSpec::None);
+    let s = RecodeSpec {
+        pairs: vec![(VarId(0), "Äx".into(), None), (VarId(0), "äx".into(), None)],
+        rules: vec![(OldValue::Else, NewValue::Copy)],
+    };
+    assert!(matches!(recode(&mut ds, &s), Err(TransformError::NameTaken(_))));
+    assert_eq!(ds.n_vars(), 1);
+    assert_eq!(var_names(&ds), ["X"]);
+}
+
+#[test]
+fn nan_bounds_and_reversed_ranges_are_rejected() {
+    let bad = [
+        OldValue::Value(NAN),
+        OldValue::Range(NAN, 1.0),
+        OldValue::Range(1.0, NAN),
+        OldValue::Lowest(NAN),
+        OldValue::Highest(NAN),
+        OldValue::Range(5.0, 1.0),
+    ];
+    for old in bad {
+        let mut ds = ds_with(vec![1.0, 2.0], MissingSpec::None);
+        let r = recode(&mut ds, &spec("Y", vec![(old, NewValue::Value(1.0))]));
+        assert!(matches!(r, Err(TransformError::InvalidArguments(_))), "{old:?}: {r:?}");
+        assert_eq!(var_names(&ds), ["X"], "{old:?}");
+    }
+    // lo == hi is a valid one-value range.
+    let mut ds = ds_with(vec![1.0, 2.0], MissingSpec::None);
+    assert!(recode(&mut ds, &spec("Y", vec![(OldValue::Range(1.0, 1.0), NewValue::Value(9.0))])).is_ok());
+}

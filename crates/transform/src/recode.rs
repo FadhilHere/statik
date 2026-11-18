@@ -59,13 +59,32 @@ pub fn recode(ds: &mut Dataset, spec: &RecodeSpec) -> Result<Vec<VarId>, Transfo
     if spec.rules.is_empty() {
         return Err(TransformError::InvalidArguments("Recode needs at least one rule".into()));
     }
+    for (old, _) in &spec.rules {
+        let bounds: &[f64] = match old {
+            OldValue::Value(v) | OldValue::Lowest(v) | OldValue::Highest(v) => &[*v],
+            OldValue::Range(lo, hi) => &[*lo, *hi],
+            _ => &[],
+        };
+        if bounds.iter().any(|b| b.is_nan()) {
+            return Err(TransformError::InvalidArguments("A recode value must be a number".into()));
+        }
+        if let OldValue::Range(lo, hi) = old
+            && lo > hi
+        {
+            return Err(TransformError::InvalidArguments(format!(
+                "Range {lo} THRU {hi}: the lower bound is greater than the upper bound"
+            )));
+        }
+    }
     let mut names: Vec<String> = Vec::new();
     for (id, out, _) in &spec.pairs {
         let out = out.trim();
         if validate_name(out).is_err() || is_reserved(out) {
             return Err(TransformError::InvalidTarget(format!("Invalid target variable name '{out}'")));
         }
-        if ds.find(out).is_some() || names.iter().any(|n| n.eq_ignore_ascii_case(out)) {
+        // Same comparison as `Dataset::find` (full Unicode lower case).
+        let lower = out.to_lowercase();
+        if ds.find(out).is_some() || names.iter().any(|n| n.to_lowercase() == lower) {
             return Err(TransformError::NameTaken(out.to_string()));
         }
         names.push(out.to_string());
@@ -103,10 +122,16 @@ pub fn recode(ds: &mut Dataset, spec: &RecodeSpec) -> Result<Vec<VarId>, Transfo
         let mut v = Variable::numeric(&name);
         v.decimals = if vals.iter().all(|x| x.is_nan() || x.fract() == 0.0) { 0 } else { 2 };
         v.label = label.clone().filter(|l| !l.trim().is_empty());
-        let id = ds
-            .add_variable(v, Column::Numeric(vals))
-            .map_err(|e| TransformError::InvalidTarget(e.to_string()))?;
-        ids.push(id);
+        match ds.add_variable(v, Column::Numeric(vals)) {
+            Ok(id) => ids.push(id),
+            Err(e) => {
+                // Should not happen after the checks above; undo so nothing is changed.
+                for id in ids.into_iter().rev() {
+                    let _ = ds.delete_variable(id);
+                }
+                return Err(TransformError::InvalidTarget(e.to_string()));
+            }
+        }
     }
     Ok(ids)
 }
