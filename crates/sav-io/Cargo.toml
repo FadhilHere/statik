@@ -1,0 +1,12 @@
+[package]
+name = "sav-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dataset = { path = "../dataset" }
+encoding_rs = "0.8"
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }

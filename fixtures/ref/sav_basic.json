@@ -1,0 +1,677 @@
+{
+  "case": "sav_basic",
+  "files": {
+    "basic.sav": {
+      "n_cases": 10,
+      "variables": [
+        {
+          "name": "id",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 0,
+          "label": "Nomor responden",
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0
+          ]
+        },
+        {
+          "name": "skor",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": "Skor tes",
+          "value_labels": [],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              -1.0,
+              -2.0,
+              -3.0
+            ]
+          },
+          "measure": "scale",
+          "values": [
+            12.5,
+            0.0,
+            null,
+            151.0,
+            152.0,
+            -99.0,
+            -100.0,
+            3.14159,
+            10000000000.0,
+            -1.0
+          ]
+        },
+        {
+          "name": "gender",
+          "type": "numeric",
+          "width": 1,
+          "decimals": 0,
+          "label": "Jenis kelamin",
+          "value_labels": [
+            [
+              1.0,
+              "Laki-laki"
+            ],
+            [
+              2.0,
+              "Perempuan"
+            ],
+            [
+              9.0,
+              "Tidak menjawab"
+            ]
+          ],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              9.0
+            ]
+          },
+          "measure": "nominal",
+          "values": [
+            1.0,
+            2.0,
+            2.0,
+            1.0,
+            9.0,
+            1.0,
+            2.0,
+            null,
+            1.0,
+            2.0
+          ]
+        },
+        {
+          "name": "puas",
+          "type": "numeric",
+          "width": 1,
+          "decimals": 0,
+          "label": "Kepuasan layanan",
+          "value_labels": [
+            [
+              1.0,
+              "Sangat tidak puas"
+            ],
+            [
+              2.0,
+              "Tidak puas"
+            ],
+            [
+              3.0,
+              "Netral"
+            ],
+            [
+              4.0,
+              "Puas"
+            ],
+            [
+              5.0,
+              "Sangat puas"
+            ],
+            [
+              8.0,
+              "Tidak tahu"
+            ]
+          ],
+          "missing": {
+            "kind": "range",
+            "lo": 7.0,
+            "hi": 9.0,
+            "discrete": 0.0
+          },
+          "measure": "ordinal",
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            8.0,
+            0.0,
+            3.0,
+            null,
+            5.0
+          ]
+        },
+        {
+          "name": "gaji",
+          "type": "numeric",
+          "width": 10,
+          "decimals": 2,
+          "label": "Gaji per bulan (juta) – café",
+          "value_labels": [],
+          "missing": {
+            "kind": "range",
+            "lo": 900.0,
+            "hi": 999.0,
+            "discrete": null
+          },
+          "measure": "scale",
+          "values": [
+            4.75,
+            12.0,
+            950.0,
+            0.5,
+            2.25,
+            null,
+            7.125,
+            999.0,
+            3.0,
+            1.5
+          ]
+        },
+        {
+          "name": "tanpa",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": null,
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25
+          ]
+        },
+        {
+          "name": "nama",
+          "type": "string",
+          "width": 12,
+          "decimals": 0,
+          "label": "Nama responden",
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "Ani",
+            "Budi Santoso",
+            "",
+            "Café Ünal",
+            " spasi depan",
+            "Dewi",
+            "Eko",
+            "Fajar",
+            "Gita",
+            "Hana"
+          ]
+        }
+      ]
+    },
+    "uncompressed.sav": {
+      "n_cases": 10,
+      "variables": [
+        {
+          "name": "id",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 0,
+          "label": "Nomor responden",
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0
+          ]
+        },
+        {
+          "name": "skor",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": "Skor tes",
+          "value_labels": [],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              -1.0,
+              -2.0,
+              -3.0
+            ]
+          },
+          "measure": "scale",
+          "values": [
+            12.5,
+            0.0,
+            null,
+            151.0,
+            152.0,
+            -99.0,
+            -100.0,
+            3.14159,
+            10000000000.0,
+            -1.0
+          ]
+        },
+        {
+          "name": "gender",
+          "type": "numeric",
+          "width": 1,
+          "decimals": 0,
+          "label": "Jenis kelamin",
+          "value_labels": [
+            [
+              1.0,
+              "Laki-laki"
+            ],
+            [
+              2.0,
+              "Perempuan"
+            ],
+            [
+              9.0,
+              "Tidak menjawab"
+            ]
+          ],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              9.0
+            ]
+          },
+          "measure": "nominal",
+          "values": [
+            1.0,
+            2.0,
+            2.0,
+            1.0,
+            9.0,
+            1.0,
+            2.0,
+            null,
+            1.0,
+            2.0
+          ]
+        },
+        {
+          "name": "puas",
+          "type": "numeric",
+          "width": 1,
+          "decimals": 0,
+          "label": "Kepuasan layanan",
+          "value_labels": [
+            [
+              1.0,
+              "Sangat tidak puas"
+            ],
+            [
+              2.0,
+              "Tidak puas"
+            ],
+            [
+              3.0,
+              "Netral"
+            ],
+            [
+              4.0,
+              "Puas"
+            ],
+            [
+              5.0,
+              "Sangat puas"
+            ],
+            [
+              8.0,
+              "Tidak tahu"
+            ]
+          ],
+          "missing": {
+            "kind": "range",
+            "lo": 7.0,
+            "hi": 9.0,
+            "discrete": 0.0
+          },
+          "measure": "ordinal",
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            8.0,
+            0.0,
+            3.0,
+            null,
+            5.0
+          ]
+        },
+        {
+          "name": "gaji",
+          "type": "numeric",
+          "width": 10,
+          "decimals": 2,
+          "label": "Gaji per bulan (juta) – café",
+          "value_labels": [],
+          "missing": {
+            "kind": "range",
+            "lo": 900.0,
+            "hi": 999.0,
+            "discrete": null
+          },
+          "measure": "scale",
+          "values": [
+            4.75,
+            12.0,
+            950.0,
+            0.5,
+            2.25,
+            null,
+            7.125,
+            999.0,
+            3.0,
+            1.5
+          ]
+        },
+        {
+          "name": "tanpa",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": null,
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25
+          ]
+        },
+        {
+          "name": "nama",
+          "type": "string",
+          "width": 12,
+          "decimals": 0,
+          "label": "Nama responden",
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "Ani",
+            "Budi Santoso",
+            "",
+            "Café Ünal",
+            " spasi depan",
+            "Dewi",
+            "Eko",
+            "Fajar",
+            "Gita",
+            "Hana"
+          ]
+        }
+      ]
+    },
+    "long_names.sav": {
+      "n_cases": 3,
+      "variables": [
+        {
+          "name": "pendapatan_bulanan_rumah_tangga_ayah_ibu",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": "Pendapatan orang tua",
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            1.5,
+            2.5,
+            3.5
+          ]
+        },
+        {
+          "name": "pendapatan_bulanan_rumah_tangga_saudara1",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": "Pendapatan saudara",
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            4.0,
+            null,
+            6.0
+          ]
+        },
+        {
+          "name": "Kepuasan_Terhadap_Layanan_Perpustakaan_X",
+          "type": "numeric",
+          "width": 1,
+          "decimals": 0,
+          "label": null,
+          "value_labels": [
+            [
+              1.0,
+              "Rendah"
+            ],
+            [
+              3.0,
+              "Tinggi"
+            ]
+          ],
+          "missing": null,
+          "measure": "ordinal",
+          "values": [
+            1.0,
+            2.0,
+            3.0
+          ]
+        }
+      ]
+    },
+    "long_string.sav": {
+      "n_cases": 4,
+      "variables": [
+        {
+          "name": "nomor",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 0,
+          "label": null,
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ]
+        },
+        {
+          "name": "komentar",
+          "type": "string",
+          "width": 300,
+          "decimals": 0,
+          "label": "Komentar terbuka (300 karakter)",
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmn",
+            "Pendek",
+            "",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé akhir"
+          ]
+        },
+        {
+          "name": "nilai",
+          "type": "numeric",
+          "width": 8,
+          "decimals": 2,
+          "label": "Nilai",
+          "value_labels": [],
+          "missing": null,
+          "measure": "scale",
+          "values": [
+            3.5,
+            null,
+            -2.0,
+            0.001
+          ]
+        },
+        {
+          "name": "kode",
+          "type": "string",
+          "width": 5,
+          "decimals": 0,
+          "label": null,
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "A1",
+            "B22",
+            "",
+            "D4444"
+          ]
+        }
+      ]
+    },
+    "cp1252.sav": {
+      "n_cases": 5,
+      "variables": [
+        {
+          "name": "kota",
+          "type": "string",
+          "width": 10,
+          "decimals": 0,
+          "label": "Kota asal (é)",
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "Café",
+            "Müller",
+            "Zürich",
+            "",
+            "Señor"
+          ]
+        },
+        {
+          "name": "nilai",
+          "type": "numeric",
+          "width": 5,
+          "decimals": 1,
+          "label": "Nilai ujian – über",
+          "value_labels": [
+            [
+              1.0,
+              "Très bien é"
+            ],
+            [
+              2.0,
+              "Gut ü"
+            ]
+          ],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              99.0
+            ]
+          },
+          "measure": "ordinal",
+          "values": [
+            1.0,
+            2.0,
+            99.0,
+            null,
+            1.5
+          ]
+        }
+      ]
+    },
+    "bigendian.sav": {
+      "n_cases": 5,
+      "variables": [
+        {
+          "name": "kota",
+          "type": "string",
+          "width": 10,
+          "decimals": 0,
+          "label": "Kota asal (é)",
+          "value_labels": [],
+          "missing": null,
+          "measure": "nominal",
+          "values": [
+            "Café",
+            "Müller",
+            "Zürich",
+            "",
+            "Señor"
+          ]
+        },
+        {
+          "name": "nilai",
+          "type": "numeric",
+          "width": 5,
+          "decimals": 1,
+          "label": "Nilai ujian – über",
+          "value_labels": [
+            [
+              1.0,
+              "Très bien é"
+            ],
+            [
+              2.0,
+              "Gut ü"
+            ]
+          ],
+          "missing": {
+            "kind": "discrete",
+            "values": [
+              99.0
+            ]
+          },
+          "measure": "ordinal",
+          "values": [
+            1.0,
+            2.0,
+            99.0,
+            null,
+            1.5
+          ]
+        }
+      ]
+    }
+  }
+}

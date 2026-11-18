@@ -6,6 +6,7 @@ members = [
     "crates/output-model",
     "crates/procedures",
     "crates/statik-cli",
+    "crates/sav-io",
 ]
 
 [workspace.package]
