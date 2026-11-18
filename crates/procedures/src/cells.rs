@@ -59,7 +59,7 @@ pub(crate) fn sig_header() -> HeaderNode {
     group("Significance", &["One-Sided p", "Two-Sided p"])
 }
 
-/// df cell: a count for integer df, three decimals otherwise (Welch).
+/// df cell: a count for integer df, three decimals otherwise.
 pub(crate) fn df_cell(df: f64) -> Cell {
     if df.fract() == 0.0 { num(df, CellFormat::Count) } else { num(df, CellFormat::Fixed(3)) }
 }

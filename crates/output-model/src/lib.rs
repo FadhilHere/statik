@@ -6,7 +6,7 @@ mod render_text;
 mod table;
 
 pub use chart::Chart;
-pub use format::format_cell;
+pub use format::{format_cell, format_markers, format_value};
 pub use render_html::render_html;
 pub use render_text::render_text;
 pub use table::{Cell, CellFormat, CellValue, HeaderNode, OutputItem, Table};

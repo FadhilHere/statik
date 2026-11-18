@@ -17,6 +17,8 @@ pub struct IndependentOptions {
 }
 
 fn test_row(t: &TResult, decimals: usize, levene: Option<(f64, f64)>) -> Vec<Cell> {
+    // The Welch row (no Levene cells) always shows df with 3 decimals, even when it is integral.
+    let df = if levene.is_some() { df_cell(t.df) } else { num(t.df, CellFormat::Fixed(3)) };
     let (f, s) = match levene {
         Some((f, s)) => (num(f, CellFormat::Fixed(3)), num(s, CellFormat::Sig)),
         None => (empty(), empty()),
@@ -25,7 +27,7 @@ fn test_row(t: &TResult, decimals: usize, levene: Option<(f64, f64)>) -> Vec<Cel
         f,
         s,
         num(t.t, CellFormat::Fixed(3)),
-        df_cell(t.df),
+        df,
         num(t.sig / 2.0, CellFormat::Sig),
         num(t.sig, CellFormat::Sig),
         num(t.mean_diff, fixed_plus(decimals, 2)),
@@ -45,7 +47,7 @@ pub fn run_independent(ds: &Dataset, o: &IndependentOptions) -> Vec<OutputItem> 
         return out;
     }
     let glabel =
-        |v: f64| g.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{v:.*}", g.decimals));
+        |v: f64| g.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", g.decimals, v + 0.0));
     let (l1, l2) = (glabel(o.group1), glabel(o.group2));
     let (mut stat_h, mut stat_rows) = (vec![], vec![]);
     let (mut test_h, mut test_rows) = (vec![], vec![]);

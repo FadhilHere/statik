@@ -115,8 +115,12 @@ fn paired_sleep_tables() {
     let ts = tables(&items);
     let titles: Vec<&str> = ts.iter().map(|t| t.title.as_str()).collect();
     assert_eq!(titles, ["Paired Samples Statistics", "Paired Samples Correlations", "Paired Samples Test"]);
-    assert_eq!(row_labels(ts[2]), ["Pair 1  x1 - x2"]);
-    assert_eq!(row_labels(ts[1]), ["Pair 1  x1 & x2"]);
+    // Every table: parent "Pair 1" with the pair's leaf (or variable leaves) below it.
+    assert_eq!(ts[2].row_headers[0].label, "Pair 1");
+    assert_eq!(row_labels(ts[2]), ["x1 - x2"]);
+    assert_eq!(ts[1].row_headers[0].label, "Pair 1");
+    assert_eq!(row_labels(ts[1]), ["x1 & x2"]);
+    assert_eq!(ts[0].row_headers[0].label, "Pair 1");
     assert_eq!(row_labels(ts[0]), ["x1", "x2"]);
     assert_eq!(ts[2].cells[0].len(), 9);
 }
@@ -185,4 +189,39 @@ fn paired_constant_difference_keeps_correlation() {
     assert_eq!(titles, ["Paired Samples Statistics", "Paired Samples Correlations"]);
     assert!((num(&tables(&items)[1].cells[0][1]) - 1.0).abs() < 1e-9);
     assert!(!warnings(&items).is_empty());
+}
+
+#[test]
+fn paired_inexact_constant_difference_warns_and_keeps_correlation() {
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("post"), Column::Numeric(vec![1.1, 2.1, 3.1, 4.1, 5.1, 6.1])).unwrap();
+    ds.add_variable(Variable::numeric("pre"), Column::Numeric(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])).unwrap();
+    let o = PairedOptions { pairs: vec![(ds.find("post").unwrap(), ds.find("pre").unwrap())], conf: 0.95 };
+    let items = run_paired(&ds, &o);
+    assert!(warnings(&items).iter().any(|w| w.contains("standard deviation is 0")), "{items:?}");
+    let titles: Vec<&str> = tables(&items).iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(titles, ["Paired Samples Statistics", "Paired Samples Correlations"]);
+    let t = tables(&items)[1];
+    assert_eq!(t.row_headers[0].label, "Pair 1");
+    assert_eq!(row_labels(t), ["post & pre"]);
+}
+
+#[test]
+fn welch_df_always_three_decimals() {
+    // Equal sizes and variances: the Welch df is exactly 4.
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("y"), Column::Numeric(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])).unwrap();
+    ds.add_variable(Variable::numeric("g"), Column::Numeric(vec![1.0, 1.0, 1.0, 2.0, 2.0, 2.0])).unwrap();
+    let o = IndependentOptions {
+        test_vars: vec![ds.find("y").unwrap()],
+        grouping: ds.find("g").unwrap(),
+        group1: 1.0,
+        group2: 2.0,
+        conf: 0.95,
+    };
+    let items = run_independent(&ds, &o);
+    let t = tables(&items).into_iter().find(|t| t.title == "Independent Samples Test").unwrap();
+    assert_eq!(num(&t.cells[1][3]), 4.0);
+    assert_eq!(format_cell(&t.cells[1][3]), "4.000");
+    assert_eq!(format_cell(&t.cells[0][3]), "4");
 }

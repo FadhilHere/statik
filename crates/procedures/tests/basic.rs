@@ -281,3 +281,22 @@ fn descriptives_z_name_unavailable_terminates() {
     let items = run_descriptives(&mut ds, &DescriptivesOptions { vars: vec![id], skew_kurt: false, save_z: true });
     assert!(!warnings(&items).is_empty() || ds.n_vars() > 1);
 }
+
+#[test]
+fn negative_zero_is_one_value() {
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("v"), Column::Numeric(vec![-0.0, 0.0, 1.0, -0.0])).unwrap();
+    ds.add_variable(Variable::numeric("y"), Column::Numeric(vec![1.0, 2.0, 3.0, 5.0])).unwrap();
+    let v = ds.find("v").unwrap();
+    let items = run_frequencies(&ds, &FrequenciesOptions { vars: vec![v], histogram: false });
+    let t = tables(&items).into_iter().find(|t| t.title == "v").unwrap();
+    assert_eq!(flat(&t.row_headers), ["0.00", "1.00", "Total"]);
+    ds.var_mut(v).value_labels.insert(OrderedValue(0.0), "Nol".into());
+    let items = run_frequencies(&ds, &FrequenciesOptions { vars: vec![v], histogram: false });
+    let t = tables(&items).into_iter().find(|t| t.title == "v").unwrap();
+    assert_eq!(flat(&t.row_headers), ["Nol", "1.00", "Total"]);
+    ds.var_mut(v).value_labels.clear();
+    let o = OneWayOptions { dependent: ds.find("y").unwrap(), factor: v, descriptives: true, homogeneity: false };
+    let items = run_oneway(&ds, &o);
+    assert_eq!(flat(&table(&items, "Descriptives").row_headers), ["0.00", "1.00", "Total"]);
+}

@@ -269,3 +269,17 @@ fn perfect_fit_no_nonfinite_cells_or_chart_values() {
         }
     }
 }
+
+#[test]
+fn zero_slope_has_defined_r_and_no_zpred_noise() {
+    let mut ds = small_ds(&[("y", vec![0.1, 0.2, 0.3, 0.2, 0.1]), ("x", vec![0.1, 0.2, 0.3, 0.4, 0.5])]);
+    let opt = all_on(&ds, "y", &["x"]);
+    let items = run_regression(&mut ds, &opt);
+    let ms = table(&items, "Model Summary");
+    assert_eq!(format_cell(&ms.cells[0][0]), ".000a");
+    let rs = table(&items, "Residuals Statistics");
+    assert!(rs.cells[2][..4].iter().all(|c| format_cell(c) == "."), "{:?}", rs.cells[2]);
+    let zpr = ds.find("ZPR_1").expect("ZPR_1 saved");
+    assert!(ds.numeric(zpr).iter().all(|v| v.is_nan()));
+    assert!(!items.iter().any(|i| matches!(i, OutputItem::Chart(Chart::Scatter { .. }))));
+}

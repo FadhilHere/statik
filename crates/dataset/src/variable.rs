@@ -33,13 +33,20 @@ impl MissingSpec {
     }
 }
 
-/// f64 newtype ordered by `total_cmp`, usable as a map key.
+/// f64 newtype ordered by `total_cmp`, usable as a map key. -0.0 and 0.0 are the same value.
 #[derive(Clone, Copy, Debug)]
 pub struct OrderedValue(pub f64);
 
+impl OrderedValue {
+    /// Key with -0.0 normalised to 0.0 (so a stored key never displays as "-0").
+    pub fn new(v: f64) -> Self {
+        OrderedValue(v + 0.0)
+    }
+}
+
 impl PartialEq for OrderedValue {
     fn eq(&self, o: &Self) -> bool {
-        self.0.total_cmp(&o.0) == Ordering::Equal
+        self.cmp(o) == Ordering::Equal
     }
 }
 impl Eq for OrderedValue {}
@@ -50,7 +57,8 @@ impl PartialOrd for OrderedValue {
 }
 impl Ord for OrderedValue {
     fn cmp(&self, o: &Self) -> Ordering {
-        self.0.total_cmp(&o.0)
+        // x + 0.0 maps -0.0 to 0.0 and leaves every other value unchanged.
+        (self.0 + 0.0).total_cmp(&(o.0 + 0.0))
     }
 }
 

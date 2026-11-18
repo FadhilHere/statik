@@ -1,4 +1,4 @@
-use crate::format::format_cell;
+use crate::format::{format_markers, format_value};
 use crate::table::*;
 
 fn esc(s: &str) -> String {
@@ -55,7 +55,9 @@ fn table(o: &mut String, t: &Table) {
         }
         for c in row {
             let align = if matches!(c.value, CellValue::Num(_)) { "right" } else { "left" };
-            o.push_str(&format!("<td style=\"{TD}text-align:{align}\">{}</td>", esc(&format_cell(c))));
+            let marks = format_markers(c);
+            let sup = if marks.is_empty() { String::new() } else { format!("<sup>{}</sup>", esc(&marks)) };
+            o.push_str(&format!("<td style=\"{TD}text-align:{align}\">{}{sup}</td>", esc(&format_value(c))));
         }
         o.push_str("</tr>\n");
     }

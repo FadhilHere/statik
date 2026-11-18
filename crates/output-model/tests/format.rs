@@ -29,7 +29,7 @@ fn count_nan_and_footnotes() {
     let c = Cell { value: CellValue::Num(0.912), format: CellFormat::Fixed(3), footnotes: vec!['a'] };
     assert_eq!(format_cell(&c), ".912a");
     let c = Cell { value: CellValue::Num(0.2), format: CellFormat::Fixed(3), footnotes: vec!['a', '*'] };
-    assert_eq!(format_cell(&c), ".200a*");
+    assert_eq!(format_cell(&c), ".200a,*");
     let t = Cell { value: CellValue::Text("x".into()), format: CellFormat::Text, footnotes: vec![] };
     assert_eq!(format_cell(&t), "x");
 }
@@ -92,4 +92,46 @@ fn regressions_count_text_rounding() {
     assert_eq!(format_cell(&num(f64::NEG_INFINITY, CellFormat::Text)), ".");
     assert_eq!(format_cell(&num(-2.5, CellFormat::Fixed(0))), "-3");
     assert_eq!(format_cell(&num(0.0005, CellFormat::Sig)), ".001");
+}
+
+#[test]
+fn fixed_huge_values_keep_digits() {
+    assert_eq!(format_cell(&num(1e20, CellFormat::Fixed(3))), "100000000000000000000.000");
+    assert_eq!(format_cell(&num(-1e20, CellFormat::Fixed(3))), "-100000000000000000000.000");
+    assert_eq!(format_cell(&num(123456789.125, CellFormat::Fixed(2))), "123456789.13");
+}
+
+#[test]
+fn multiple_markers_are_comma_joined() {
+    let c = Cell { value: CellValue::Num(0.2), format: CellFormat::Sig, footnotes: vec!['c', 'd'] };
+    assert_eq!(format_cell(&c), ".200c,d");
+}
+
+fn marked_table() -> Table {
+    let h = |s: &str| HeaderNode { label: s.into(), children: vec![] };
+    Table {
+        title: "T".into(),
+        col_headers: vec![h("Sig.")],
+        row_headers: vec![h("r"), h("s")],
+        cells: vec![vec![
+            Cell { value: CellValue::Text("x".into()), format: CellFormat::Text, footnotes: vec!['b'] },
+        ], vec![
+            Cell { value: CellValue::Num(0.2), format: CellFormat::Sig, footnotes: vec!['c', 'd'] },
+        ]],
+        footnotes: vec![],
+    }
+}
+
+#[test]
+fn html_markers_are_superscript() {
+    let html = render_html(&[OutputItem::Table(marked_table())]);
+    assert!(html.contains(">x<sup>b</sup></td>"), "{html}");
+    assert!(html.contains(">.200<sup>c,d</sup></td>"), "{html}");
+}
+
+#[test]
+fn text_markers_are_comma_joined_letters() {
+    let txt = render_text(&[OutputItem::Table(marked_table())]);
+    assert!(txt.contains(".200c,d"), "{txt}");
+    assert!(txt.contains("xb"), "{txt}");
 }

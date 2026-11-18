@@ -60,3 +60,14 @@ fn range_missing() {
     let m: Vec<bool> = (0..4).map(|i| ds.is_missing(id, i)).collect();
     assert_eq!(m, [false, true, true, false]);
 }
+
+#[test]
+fn ordered_value_negative_zero_is_zero() {
+    assert_eq!(OrderedValue(-0.0), OrderedValue(0.0));
+    assert_eq!(OrderedValue(-0.0).cmp(&OrderedValue(0.0)), std::cmp::Ordering::Equal);
+    assert!(OrderedValue::new(-0.0).0.is_sign_positive());
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(OrderedValue(0.0), "Nol");
+    assert_eq!(m.get(&OrderedValue(-0.0)), Some(&"Nol"));
+    assert!(OrderedValue(-1.0) < OrderedValue(-0.0));
+}

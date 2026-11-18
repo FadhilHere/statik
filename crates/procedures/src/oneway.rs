@@ -27,7 +27,7 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
     let mut data: Vec<Vec<f64>> = vec![];
     let mut rows: Vec<(f64, f64)> = (0..ds.n_cases())
         .filter(|&r| !ds.is_missing(o.dependent, r) && !ds.is_missing(o.factor, r))
-        .map(|r| (ds.numeric(o.factor)[r], ds.numeric(o.dependent)[r]))
+        .map(|r| (ds.numeric(o.factor)[r] + 0.0, ds.numeric(o.dependent)[r])) // -0.0 -> 0.0
         .collect();
     rows.sort_by(|a, b| a.0.total_cmp(&b.0)); // stable: keeps case order inside a group
     for (g, v) in rows {
@@ -50,7 +50,7 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
     };
     let dec = dep.decimals;
     let glabel =
-        |v: f64| fac.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{v:.*}", fac.decimals));
+        |v: f64| fac.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", fac.decimals, v + 0.0));
     let f3 = CellFormat::Fixed(3);
     let count = |v: usize| num(v as f64, CellFormat::Count);
     let all: Vec<f64> = data.iter().flatten().copied().collect();

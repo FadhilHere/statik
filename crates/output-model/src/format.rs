@@ -7,6 +7,10 @@ fn fixed(v: f64, n: u8) -> String {
         return ".".to_string();
     }
     let p = 10f64.powi(n as i32);
+    // Beyond 2^52 every f64 is an integer and v·10^n would lose digits: format directly.
+    if v.abs() * p >= 4_503_599_627_370_496.0 {
+        return format!("{:.*}", n as usize, v);
+    }
     let scaled = (v.abs() * p).round();
     let r = scaled / p;
     let mut s = format!("{:.*}", n as usize, r);
@@ -19,8 +23,19 @@ fn fixed(v: f64, n: u8) -> String {
     s
 }
 
+/// Cell text including footnote markers (comma-joined, SPSS style: `.200c,d`).
 pub fn format_cell(c: &Cell) -> String {
-    let mut s = match &c.value {
+    format_value(c) + &format_markers(c)
+}
+
+/// Footnote markers of a cell joined with ",", or "" when there are none.
+pub fn format_markers(c: &Cell) -> String {
+    c.footnotes.iter().map(char::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// Cell text without footnote markers.
+pub fn format_value(c: &Cell) -> String {
+    match &c.value {
         CellValue::Empty => String::new(),
         CellValue::Text(t) => t.clone(),
         CellValue::Num(v) => match c.format {
@@ -42,7 +57,5 @@ pub fn format_cell(c: &Cell) -> String {
                 }
             }
         },
-    };
-    s.extend(c.footnotes.iter());
-    s
+    }
 }

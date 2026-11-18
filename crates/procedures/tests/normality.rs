@@ -167,7 +167,7 @@ fn npar_ks_table() {
     assert_eq!(rows[6], ".143");
     assert!(rows[7].starts_with(".200"), "{}", rows[7]);
     assert_eq!(t.cells[7][0].footnotes, vec!['c', 'd']);
-    assert_eq!(rows[7], ".200cd");
+    assert_eq!(rows[7], ".200c,d");
     let notes: Vec<&str> = t.footnotes.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(
         notes,
@@ -215,7 +215,7 @@ fn npar_ks_on_saved_regression_residuals() {
     assert_eq!(rows[1], ".0000000");
     assert_eq!(rows[2].split('.').nth(1).unwrap().len(), 8, "{}", rows[2]);
     assert_eq!(rows[3], ".069");
-    assert_eq!(rows[7], ".200cd");
+    assert_eq!(rows[7], ".200c,d");
 }
 
 #[test]

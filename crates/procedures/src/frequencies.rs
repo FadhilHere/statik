@@ -32,9 +32,9 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
             if v.is_nan() {
                 system += 1;
             } else if ds.is_missing(id, r) {
-                *user.entry(OrderedValue(v)).or_default() += 1;
+                *user.entry(OrderedValue::new(v)).or_default() += 1;
             } else {
-                *valid.entry(OrderedValue(v)).or_default() += 1;
+                *valid.entry(OrderedValue::new(v)).or_default() += 1;
                 values.push(v);
             }
         }
@@ -45,7 +45,7 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
         stat_cols.push((n_valid, n_missing));
 
         let vlabel =
-            |v: f64| var.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{v:.*}", var.decimals));
+            |v: f64| var.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", var.decimals, v + 0.0));
         let pct = |c: usize, d: usize| 100.0 * c as f64 / d as f64;
         let f1 = CellFormat::Fixed(1);
         let freq = |c: usize| num(c as f64, CellFormat::Count);

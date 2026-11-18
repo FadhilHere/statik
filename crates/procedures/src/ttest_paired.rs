@@ -55,14 +55,14 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
             warns.extend(warning(why));
             // SPSS still prints the correlation when only the differences are constant.
             let (c, cs) = paired_corr(&xa, &xb);
-            corr_h.push(leaf(&format!("Pair {k}  {la} & {lb}")));
+            corr_h.push(group(&format!("Pair {k}"), &[&format!("{la} & {lb}")]));
             corr_rows.push(corr_row(rows.len(), c, cs));
             continue;
         };
         let dec = va.decimals.max(vb.decimals);
-        corr_h.push(leaf(&format!("Pair {k}  {la} & {lb}")));
+        corr_h.push(group(&format!("Pair {k}"), &[&format!("{la} & {lb}")]));
         corr_rows.push(corr_row(rows.len(), r.corr, r.corr_sig));
-        test_h.push(leaf(&format!("Pair {k}  {la} - {lb}")));
+        test_h.push(group(&format!("Pair {k}"), &[&format!("{la} - {lb}")]));
         test_rows.push(vec![
             num(r.test.mean_diff, fixed_plus(dec, 2)),
             num(r.sd_diff, fixed_plus(dec, 3)),
