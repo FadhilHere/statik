@@ -87,6 +87,7 @@ pub fn run_descriptives(ds: &mut Dataset, o: &DescriptivesOptions) -> Vec<Output
     }
     out.push(OutputItem::Table(Table {
         title: "Descriptive Statistics".into(),
+        title_footnotes: vec![],
         col_headers,
         row_headers: names.iter().map(|s| leaf(s)).collect(),
         cells,

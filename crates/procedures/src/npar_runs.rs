@@ -1,5 +1,5 @@
 //! Runs test about the median (SPSS NPAR TESTS /RUNS(MEDIAN)).
-use crate::cells::{check_ids, fixed_plus, foot, label, leaf, num, warning};
+use crate::cells::{check_ids, fixed_plus, label, leaf, marked, num, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::runs_test_median;
@@ -34,7 +34,7 @@ pub fn run_runs(ds: &Dataset, o: &RunsOptions) -> Vec<OutputItem> {
         };
         let count = |v: usize| num(v as f64, CellFormat::Count);
         cols.push(vec![
-            foot(num(r.test_value, fixed_plus(var.decimals, 2)), 'a'),
+            num(r.test_value, fixed_plus(var.decimals, 2)),
             count(r.n_below),
             count(r.n_at_or_above),
             count(r.n_below + r.n_at_or_above),
@@ -50,18 +50,17 @@ pub fn run_runs(ds: &Dataset, o: &RunsOptions) -> Vec<OutputItem> {
     let cells = (0..cols[0].len()).map(|r| cols.iter().map(|c| c[r].clone()).collect()).collect();
     out.push(OutputItem::Table(Table {
         title: "Runs Test".into(),
+        title_footnotes: vec![],
         col_headers,
-        row_headers: [
-            "Test Value",
-            "Cases < Test Value",
-            "Cases >= Test Value",
-            "Total Cases",
-            "Number of Runs",
-            "Z",
-            "Asymp. Sig. (2-tailed)",
-        ]
-        .map(leaf)
-        .to_vec(),
+        row_headers: vec![
+            marked(leaf("Test Value"), &['a']),
+            leaf("Cases < Test Value"),
+            leaf("Cases >= Test Value"),
+            leaf("Total Cases"),
+            leaf("Number of Runs"),
+            leaf("Z"),
+            leaf("Asymp. Sig. (2-tailed)"),
+        ],
         cells,
         footnotes: vec![('a', "Median".to_string())],
     }));

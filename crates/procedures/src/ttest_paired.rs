@@ -90,6 +90,7 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
     }
     out.push(OutputItem::Table(Table {
         title: "Paired Samples Statistics".into(),
+        title_footnotes: vec![],
         col_headers: ["Mean", "N", "Std. Deviation", "Std. Error Mean"].iter().map(|s| leaf(s)).collect(),
         row_headers: stat_h,
         cells: stat_rows,
@@ -99,6 +100,7 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
     if !corr_rows.is_empty() {
         out.push(OutputItem::Table(Table {
             title: "Paired Samples Correlations".into(),
+            title_footnotes: vec![],
             col_headers: vec![leaf("N"), leaf("Correlation"), sig_header()],
             row_headers: corr_h,
             cells: corr_rows,
@@ -109,6 +111,7 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
         let ci = format!("{}% Confidence Interval of the Difference", pct(o.conf));
         out.push(OutputItem::Table(Table {
             title: "Paired Samples Test".into(),
+            title_footnotes: vec![],
             col_headers: vec![
                 parent(
                     "Paired Differences",

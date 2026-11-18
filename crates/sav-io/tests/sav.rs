@@ -517,6 +517,29 @@ fn reserved_names_are_renamed_on_read_with_a_note() {
 
 /// A numeric column on a string variable is an internal inconsistency, not an invalid file;
 /// the failed save leaves the existing file untouched and no temporary file behind.
+/// Number of `<file>.<something>.tmp` temporary files next to `target`.
+fn leftover_temps(target: &std::path::Path) -> usize {
+    let prefix = format!("{}.", target.file_name().unwrap().to_string_lossy());
+    std::fs::read_dir(target.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&prefix) && n.ends_with(".tmp") && n.len() > prefix.len() + 4)
+        .count()
+}
+
+#[test]
+fn users_own_dot_tmp_file_survives_a_save() {
+    let out = tmp("user_tmp.sav");
+    let user_tmp = tmp("user_tmp.sav.tmp");
+    std::fs::write(&user_tmp, b"not statik's").unwrap();
+    let (ds, _) = read_sav(&fixture("basic.sav")).unwrap();
+    write_sav(&ds, &out).unwrap();
+    assert_eq!(std::fs::read(&user_tmp).unwrap(), b"not statik's");
+    assert_eq!(read_sav(&out).unwrap().0.n_vars(), ds.n_vars());
+    assert_eq!(leftover_temps(&out), 0);
+}
+
 #[test]
 fn failed_save_is_internal_error_and_keeps_existing_file() {
     let out = tmp("keep_existing.sav");
@@ -528,7 +551,7 @@ fn failed_save_is_internal_error_and_keeps_existing_file() {
     assert!(matches!(e, SavError::Internal(_)), "{e:?}");
     assert_eq!(e.to_string(), "Cannot save: variable 'x' has a numeric column but a string type");
     assert_eq!(std::fs::read(&out).unwrap(), b"original bytes");
-    assert!(!tmp("keep_existing.sav.tmp").exists());
+    assert_eq!(leftover_temps(&out), 0);
 }
 
 #[test]
@@ -538,7 +561,7 @@ fn save_replaces_existing_file_without_leaving_a_temporary_file() {
     let (ds, _) = read_sav(&fixture("basic.sav")).unwrap();
     write_sav(&ds, &out).unwrap();
     assert_eq!(read_sav(&out).unwrap().0.n_vars(), ds.n_vars());
-    assert!(!tmp("replace_existing.sav.tmp").exists());
+    assert_eq!(leftover_temps(&out), 0);
 }
 
 /// A save into a folder that does not exist fails with an i/o error and creates nothing.

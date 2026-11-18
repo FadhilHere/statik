@@ -82,6 +82,7 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
         }
         body.push(OutputItem::Table(Table {
             title: name.clone(),
+            title_footnotes: vec![],
             col_headers: ["Frequency", "Percent", "Valid Percent", "Cumulative Percent"].map(leaf).to_vec(),
             row_headers,
             cells: rows,
@@ -89,7 +90,8 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
         }));
         if o.histogram && !values.is_empty() {
             body.push(OutputItem::Chart(Chart::Histogram {
-                title: format!("Histogram\n{name}"),
+                title: "Histogram".into(),
+                subtitle: Some(name.clone()),
                 values,
                 normal_curve: false,
             }));
@@ -101,6 +103,7 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
     let count = |v: usize| num(v as f64, CellFormat::Count);
     out.push(OutputItem::Table(Table {
         title: "Statistics".into(),
+        title_footnotes: vec![],
         col_headers: stat_h,
         row_headers: vec![group("N", &["Valid", "Missing"])],
         cells: vec![stat_cols.iter().map(|c| count(c.0)).collect(), stat_cols.iter().map(|c| count(c.1)).collect()],

@@ -78,6 +78,7 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
             .collect();
         out.push(OutputItem::Table(Table {
             title: "Descriptives".into(),
+            title_footnotes: vec![],
             col_headers: vec![
                 leaf("N"),
                 leaf("Mean"),
@@ -96,6 +97,7 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
         let (f, sig, df1, df2) = levene_mean(&slices);
         out.push(OutputItem::Table(Table {
             title: "Tests of Homogeneity of Variances".into(),
+            title_footnotes: vec![],
             col_headers: ["Levene Statistic", "df1", "df2", "Sig."].map(leaf).to_vec(),
             row_headers: vec![leaf("Based on Mean")],
             cells: vec![vec![num(f, f3), count(df1), count(df2), num(sig, CellFormat::Sig)]],
@@ -106,6 +108,7 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
     let ms_w = a.ss_within / a.df_within as f64;
     out.push(OutputItem::Table(Table {
         title: "ANOVA".into(),
+        title_footnotes: vec![],
         col_headers: ["Sum of Squares", "df", "Mean Square", "F", "Sig."].map(leaf).to_vec(),
         row_headers: ["Between Groups", "Within Groups", "Total"].map(leaf).to_vec(),
         cells: vec![

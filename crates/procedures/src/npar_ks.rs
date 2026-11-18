@@ -1,5 +1,5 @@
 //! One-Sample Kolmogorov-Smirnov test for normality (SPSS NPAR TESTS /K-S(NORMAL), Lilliefors corrected).
-use crate::cells::{LOWER_BOUND_NOTE, check_ids, fixed_plus, foot, group, label, leaf, num, warning};
+use crate::cells::{LOWER_BOUND_NOTE, check_ids, fixed_plus, group, label, leaf, marked, num, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::lilliefors;
@@ -43,9 +43,7 @@ pub fn run_npar_ks(ds: &Dataset, opt: &NparKsOptions) -> Vec<OutputItem> {
         let mean = x.iter().sum::<f64>() / n;
         let sd = (x.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt();
         let f3 = CellFormat::Fixed(3);
-        let mut sig = foot(num(ks.sig, CellFormat::Sig), 'c');
         if ks.sig_is_lower_bound {
-            sig = foot(sig, 'd');
             any_bound = true;
         }
         cols.push(vec![
@@ -56,7 +54,7 @@ pub fn run_npar_ks(ds: &Dataset, opt: &NparKsOptions) -> Vec<OutputItem> {
             num(ks.d_pos, f3),
             num(ks.d_neg, f3),
             num(ks.d, f3),
-            sig,
+            num(ks.sig, CellFormat::Sig),
         ]);
         col_headers.push(leaf(&label(ds, id)));
     }
@@ -74,13 +72,14 @@ pub fn run_npar_ks(ds: &Dataset, opt: &NparKsOptions) -> Vec<OutputItem> {
     let cells = (0..cols[0].len()).map(|r| cols.iter().map(|c| c[r].clone()).collect()).collect();
     out.push(OutputItem::Table(Table {
         title: "One-Sample Kolmogorov-Smirnov Test".into(),
+        title_footnotes: vec![],
         col_headers,
         row_headers: vec![
             leaf("N"),
-            group("Normal Parameters", &["Mean", "Std. Deviation"]),
+            marked(group("Normal Parameters", &["Mean", "Std. Deviation"]), &['a', 'b']),
             group("Most Extreme Differences", &["Absolute", "Positive", "Negative"]),
-            leaf("Test Statistic"),
-            leaf("Asymp. Sig. (2-tailed)"),
+            marked(leaf("Test Statistic"), &['c']),
+            marked(leaf("Asymp. Sig. (2-tailed)"), if any_bound { &['d'][..] } else { &[] }),
         ],
         cells,
         footnotes,

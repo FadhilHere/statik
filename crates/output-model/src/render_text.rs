@@ -1,4 +1,4 @@
-use crate::format::format_cell;
+use crate::format::{format_cell, join_markers};
 use crate::table::*;
 
 pub fn render_text(items: &[OutputItem]) -> String {
@@ -7,7 +7,10 @@ pub fn render_text(items: &[OutputItem]) -> String {
         match it {
             OutputItem::Title(t) | OutputItem::Notes(t) => o.push_str(&format!("{t}\n\n")),
             OutputItem::Warning(t) => o.push_str(&format!("Warning: {t}\n\n")),
-            OutputItem::Chart(c) => o.push_str(&format!("[Chart: {}]\n\n", c.title())),
+            OutputItem::Chart(c) => match c.subtitle() {
+                Some(s) => o.push_str(&format!("[Chart: {} ({s})]\n\n", c.title())),
+                None => o.push_str(&format!("[Chart: {}]\n\n", c.title())),
+            },
             OutputItem::Table(t) => table(&mut o, t),
         }
     }
@@ -25,12 +28,13 @@ fn table(o: &mut String, t: &Table) {
     for h in header_cells(&t.col_headers) {
         // Leaf headers sit on the bottom header row so they line up with the data.
         let row = if h.rowspan > 1 { h.level + h.rowspan - 1 } else { h.level };
-        grid[row][rdepth + h.col] = h.label;
+        grid[row][rdepth + h.col] = format!("{}{}", h.label, join_markers(&h.footnotes));
     }
     for (ri, row) in t.cells.iter().enumerate() {
         let mut line = vec![String::new(); total];
         for (d, slot) in line.iter_mut().enumerate().take(rdepth) {
-            *slot = row_label(&paths, ri, d);
+            let (l, f) = row_label(&paths, ri, d);
+            *slot = format!("{l}{}", join_markers(&f));
         }
         for (ci, c) in row.iter().enumerate() {
             line[rdepth + ci] = format_cell(c);
@@ -46,7 +50,7 @@ fn table(o: &mut String, t: &Table) {
     }
     let line_w = w.iter().sum::<usize>() + 2 * total.saturating_sub(1);
     let rule = "-".repeat(line_w);
-    o.push_str(&format!("{}\n{rule}\n", t.title));
+    o.push_str(&format!("{}{}\n{rule}\n", t.title, join_markers(&t.title_footnotes)));
     for (ri, r) in grid.iter().enumerate() {
         let parts: Vec<String> = r
             .iter()

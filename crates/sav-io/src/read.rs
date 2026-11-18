@@ -423,10 +423,43 @@ fn read_extension(subtype: i32, size: usize, count: usize, data: &[u8], endian: 
             ext.dropped.insert("Multiple response sets were not kept.");
         }
         17 | 18 => {
-            ext.dropped.insert("Custom file and variable attributes (such as Role) were not kept.");
+            // SPSS writes its own `$@Role`, `$@Measure`, ... here; only user attributes are worth a note.
+            if has_user_attribute(data) {
+                ext.dropped.insert("Custom file and variable attributes were not kept.");
+            }
         }
         _ => {} // extended case count (16), trends/date info, etc.
     }
+}
+
+/// Does an attribute payload (`name('value'\n)name2('a'\n'b'\n)`, variable attributes prefixed
+/// `var:`) hold an attribute whose name does not start with `$@` (SPSS-internal)?
+fn has_user_attribute(data: &[u8]) -> bool {
+    let mut name: Vec<u8> = vec![];
+    let mut i = 0;
+    while i < data.len() {
+        match data[i] {
+            b'(' => {
+                if !name.is_empty() && !name.starts_with(b"$@") {
+                    return true;
+                }
+                name.clear();
+                // Skip the value list: up to the `)` outside single quotes ('' is an escaped quote).
+                let mut quoted = false;
+                i += 1;
+                while i < data.len() && (quoted || data[i] != b')') {
+                    if data[i] == b'\'' {
+                        quoted = !quoted;
+                    }
+                    i += 1;
+                }
+            }
+            b':' | b'/' | b')' | b'\n' | b'\r' | b' ' | b'\t' | 0 => name.clear(),
+            c => name.push(c),
+        }
+        i += 1;
+    }
+    false
 }
 
 fn pick_encoding(ext: &Extensions) -> Result<&'static Encoding, SavError> {
@@ -633,6 +666,28 @@ fn read_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dropped_notes(subtype: i32, payload: &[u8]) -> usize {
+        let mut ext = Extensions::default();
+        read_extension(subtype, 1, payload.len(), payload, Endian::Little, &mut ext);
+        ext.dropped.len()
+    }
+
+    #[test]
+    fn spss_internal_attributes_are_silent() {
+        assert_eq!(dropped_notes(17, b"$@Role('0'\n)"), 0);
+        assert_eq!(dropped_notes(18, b"x:$@Role('1'\n)/y:$@Measure('3'\n)$@Role('0'\n)"), 0);
+        // A value that merely looks like an attribute does not count.
+        assert_eq!(dropped_notes(18, b"x:$@Role('a(b'\n)"), 0);
+    }
+
+    #[test]
+    fn user_attributes_produce_the_note() {
+        assert_eq!(dropped_notes(17, b"$@Role('0'\n)Catatan('dari dosen'\n)"), 1);
+        assert_eq!(dropped_notes(18, b"x:$@Role('1'\n)/y:Sumber('survei'\n)"), 1);
+        assert_eq!(dropped_notes(18, b"x:Etiket[1]('a'\n'b'\n)"), 1);
+        assert_eq!(dropped_notes(17, b""), 0);
+    }
 
     #[test]
     fn code_pages_map_to_encodings() {

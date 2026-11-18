@@ -26,7 +26,7 @@ struct Planned<'d> {
     dict_index: usize,
 }
 
-/// Save `ds` to `path`. The file is written to `<path>.tmp` in the same folder, flushed to disk
+/// Save `ds` to `path`. The file is written to a uniquely named `<path>.<pid>-<nanos>.tmp` in the same folder, flushed to disk
 /// and then renamed over `path`, so a failed save never leaves a half-written file: the existing
 /// file stays as it was (also when it cannot be replaced, e.g. because another program has it
 /// open) and the temporary file is removed.
@@ -35,12 +35,11 @@ pub fn write_sav(ds: &Dataset, path: &Path) -> Result<(), SavError> {
     replace_file(path, |f| f.write_all(&bytes))
 }
 
-/// Write a new file through `write` to `<path>.tmp`, sync it and rename it over `path`.
+/// Write a new file through `write` to a temporary name next to `path`, sync it and rename it over `path`.
 fn replace_file(path: &Path, write: impl FnOnce(&mut File) -> std::io::Result<()>) -> Result<(), SavError> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    let result = File::create(&tmp).and_then(|mut f| {
+    let tmp = temp_path(path);
+    // `create_new`: never overwrite a file that is already there (e.g. the user's own `x.sav.tmp`).
+    let result = File::options().write(true).create_new(true).open(&tmp).and_then(|mut f| {
         write(&mut f)?;
         f.sync_all()?;
         drop(f);
@@ -50,6 +49,15 @@ fn replace_file(path: &Path, write: impl FnOnce(&mut File) -> std::io::Result<()
         let _ = std::fs::remove_file(&tmp);
     }
     Ok(result?)
+}
+
+/// `<path>.<pid>-<nanos>.tmp` in the same folder: unique per save, so it cannot collide with a
+/// file of the user's.
+fn temp_path(path: &Path) -> PathBuf {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}-{nanos}.tmp", std::process::id()));
+    PathBuf::from(tmp)
 }
 
 fn to_bytes(ds: &Dataset) -> Result<Vec<u8>, SavError> {
@@ -479,6 +487,24 @@ mod tests {
         assert!(matches!(replace_file(&target, |f| f.write_all(b"new")), Err(SavError::Io(_))));
         assert!(target.is_dir());
         assert!(!scratch("atomic_dir.sav.tmp").exists());
+    }
+
+    /// A user's own `<file>.tmp` is neither overwritten nor deleted by a save.
+    #[test]
+    fn existing_dot_tmp_file_of_the_user_survives() {
+        let target = scratch("keep_tmp.sav");
+        let user_tmp = scratch("keep_tmp.sav.tmp");
+        std::fs::write(&user_tmp, b"mine").unwrap();
+        replace_file(&target, |f| f.write_all(b"new")).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::read(&user_tmp).unwrap(), b"mine");
+        // A failing save does not touch it either.
+        let dir = scratch("keep_tmp_dir.sav");
+        std::fs::create_dir_all(&dir).unwrap();
+        let user_tmp2 = scratch("keep_tmp_dir.sav.tmp");
+        std::fs::write(&user_tmp2, b"mine too").unwrap();
+        assert!(replace_file(&dir, |f| f.write_all(b"new")).is_err());
+        assert_eq!(std::fs::read(&user_tmp2).unwrap(), b"mine too");
     }
 
     #[test]

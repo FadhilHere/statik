@@ -1,5 +1,9 @@
-use crate::format::{format_markers, format_value};
+use crate::format::{format_markers, format_value, join_markers};
 use crate::table::*;
+
+fn sup(marks: &[char]) -> String {
+    if marks.is_empty() { String::new() } else { format!("<sup>{}</sup>", esc(&join_markers(marks))) }
+}
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
@@ -17,7 +21,10 @@ pub fn render_html(items: &[OutputItem]) -> String {
             OutputItem::Warning(t) => {
                 o.push_str(&format!("<p style=\"{FONT};color:#a00\">Warning: {}</p>\n", esc(t)))
             }
-            OutputItem::Chart(c) => o.push_str(&format!("<p style=\"{FONT}\">[Chart: {}]</p>\n", esc(c.title()))),
+            OutputItem::Chart(c) => {
+                let sub = c.subtitle().map(|s| format!(" ({})", esc(s))).unwrap_or_default();
+                o.push_str(&format!("<p style=\"{FONT}\">[Chart: {}{sub}]</p>\n", esc(c.title())))
+            }
             OutputItem::Table(t) => table(&mut o, t),
         }
     }
@@ -28,7 +35,7 @@ fn table(o: &mut String, t: &Table) {
     let paths = leaf_paths(&t.row_headers);
     let rdepth = paths.iter().map(|p| p.len()).max().unwrap_or(1).max(1);
     o.push_str(&format!("<table style=\"border-collapse:collapse;{FONT};font-size:10pt\">\n"));
-    o.push_str(&format!("<caption style=\"font-weight:bold;text-align:left\">{}</caption>\n", esc(&t.title)));
+    o.push_str(&format!("<caption style=\"font-weight:bold;text-align:left\">{}{}</caption>\n", esc(&t.title), sup(&t.title_footnotes)));
     o.push_str("<thead>\n");
     let hcells = header_cells(&t.col_headers);
     let levels = header_depth(&t.col_headers);
@@ -39,10 +46,11 @@ fn table(o: &mut String, t: &Table) {
         }
         for h in hcells.iter().filter(|h| h.level == lvl) {
             o.push_str(&format!(
-                "<th colspan=\"{}\" rowspan=\"{}\" style=\"{TD}text-align:center\">{}</th>",
+                "<th colspan=\"{}\" rowspan=\"{}\" style=\"{TD}text-align:center\">{}{}</th>",
                 h.colspan,
                 h.rowspan,
-                esc(&h.label)
+                esc(&h.label),
+                sup(&h.footnotes)
             ));
         }
         o.push_str("</tr>\n");
@@ -51,13 +59,14 @@ fn table(o: &mut String, t: &Table) {
     for (ri, row) in t.cells.iter().enumerate() {
         o.push_str("<tr>");
         for d in 0..rdepth {
-            o.push_str(&format!("<th style=\"{TD}text-align:left\">{}</th>", esc(&row_label(&paths, ri, d))));
+            let (l, f) = row_label(&paths, ri, d);
+            o.push_str(&format!("<th style=\"{TD}text-align:left\">{}{}</th>", esc(&l), sup(&f)));
         }
         for c in row {
             let align = if matches!(c.value, CellValue::Num(_)) { "right" } else { "left" };
             let marks = format_markers(c);
-            let sup = if marks.is_empty() { String::new() } else { format!("<sup>{}</sup>", esc(&marks)) };
-            o.push_str(&format!("<td style=\"{TD}text-align:{align}\">{}{sup}</td>", esc(&format_value(c))));
+            let marks = if marks.is_empty() { String::new() } else { format!("<sup>{}</sup>", esc(&marks)) };
+            o.push_str(&format!("<td style=\"{TD}text-align:{align}\">{}{marks}</td>", esc(&format_value(c))));
         }
         o.push_str("</tr>\n");
     }

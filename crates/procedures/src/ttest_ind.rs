@@ -109,6 +109,7 @@ pub fn run_independent(ds: &Dataset, o: &IndependentOptions) -> Vec<OutputItem> 
     if !stat_rows.is_empty() {
         out.push(OutputItem::Table(Table {
             title: "Group Statistics".into(),
+            title_footnotes: vec![],
             col_headers: ["N", "Mean", "Std. Deviation", "Std. Error Mean"].iter().map(|s| leaf(s)).collect(),
             row_headers: stat_h,
             cells: stat_rows,
@@ -120,6 +121,7 @@ pub fn run_independent(ds: &Dataset, o: &IndependentOptions) -> Vec<OutputItem> 
         let ci = format!("{}% Confidence Interval of the Difference", pct(o.conf));
         out.push(OutputItem::Table(Table {
             title: "Independent Samples Test".into(),
+            title_footnotes: vec![],
             col_headers: vec![
                 group("Levene's Test for Equality of Variances", &["F", "Sig."]),
                 parent(

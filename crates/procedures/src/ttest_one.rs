@@ -67,6 +67,7 @@ pub fn run_one_sample(ds: &Dataset, o: &OneSampleOptions) -> Vec<OutputItem> {
     }
     out.push(OutputItem::Table(Table {
         title: "One-Sample Statistics".into(),
+        title_footnotes: vec![],
         col_headers: ["N", "Mean", "Std. Deviation", "Std. Error Mean"].iter().map(|s| leaf(s)).collect(),
         row_headers: stat_h,
         cells: stat_rows,
@@ -78,6 +79,7 @@ pub fn run_one_sample(ds: &Dataset, o: &OneSampleOptions) -> Vec<OutputItem> {
         let ci = format!("{}% Confidence Interval of the Difference", pct(o.conf));
         out.push(OutputItem::Table(Table {
             title: "One-Sample Test".into(),
+            title_footnotes: vec![],
             col_headers: vec![parent(
                 &tv,
                 vec![leaf("t"), leaf("df"), sig_header(), leaf("Mean Difference"), group(&ci, &["Lower", "Upper"])],

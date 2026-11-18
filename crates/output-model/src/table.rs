@@ -1,6 +1,55 @@
 use crate::chart::Chart;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// serde adapter for `f64`: NaN and the infinities (which JSON cannot hold) are written as the
+/// strings "NaN", "inf" and "-inf".
+mod num_f64 {
+    use serde::de::{self, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+        if v.is_finite() {
+            s.serialize_f64(*v)
+        } else if v.is_nan() {
+            s.serialize_str("NaN")
+        } else if *v > 0.0 {
+            s.serialize_str("inf")
+        } else {
+            s.serialize_str("-inf")
+        }
+    }
+
+    struct V;
+    impl Visitor<'_> for V {
+        type Value = f64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a number or one of \"NaN\", \"inf\", \"-inf\"")
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<f64, E> {
+            match v {
+                "NaN" => Ok(f64::NAN),
+                "inf" => Ok(f64::INFINITY),
+                "-inf" => Ok(f64::NEG_INFINITY),
+                _ => Err(E::invalid_value(de::Unexpected::Str(v), &self)),
+            }
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+        d.deserialize_any(V)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum CellFormat {
     Fixed(u8),
     Sig,
@@ -8,36 +57,40 @@ pub enum CellFormat {
     Text,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CellValue {
-    Num(f64),
+    Num(#[serde(with = "num_f64")] f64),
     Text(String),
     Empty,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub value: CellValue,
     pub format: CellFormat,
     pub footnotes: Vec<char>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeaderNode {
     pub label: String,
+    /// Footnote markers shown after the label (SPSS superscripts on headers).
+    pub footnotes: Vec<char>,
     pub children: Vec<HeaderNode>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Table {
     pub title: String,
+    /// Footnote markers shown after the title (e.g. "Coefficients^a").
+    pub title_footnotes: Vec<char>,
     pub col_headers: Vec<HeaderNode>,
     pub row_headers: Vec<HeaderNode>,
     pub cells: Vec<Vec<Cell>>,
     pub footnotes: Vec<(char, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OutputItem {
     Title(String),
     Notes(String),
@@ -66,6 +119,7 @@ pub(crate) fn leaf_count(nodes: &[HeaderNode]) -> usize {
 /// One header cell placed on a grid: level (row), starting leaf column, spans.
 pub(crate) struct HeaderCell {
     pub label: String,
+    pub footnotes: Vec<char>,
     pub level: usize,
     pub col: usize,
     pub colspan: usize,
@@ -81,7 +135,7 @@ pub(crate) fn header_depth(nodes: &[HeaderNode]) -> usize {
 pub(crate) fn header_cells(nodes: &[HeaderNode]) -> Vec<HeaderCell> {
     fn walk(n: &HeaderNode, level: usize, col: usize, total: usize, out: &mut Vec<HeaderCell>) {
         let rowspan = if n.children.is_empty() { total - level } else { 1 };
-        out.push(HeaderCell { label: n.label.clone(), level, col, colspan: leaves(n), rowspan });
+        out.push(HeaderCell { label: n.label.clone(), footnotes: n.footnotes.clone(), level, col, colspan: leaves(n), rowspan });
         let mut c = col;
         for ch in &n.children {
             walk(ch, level + 1, c, total, out);
@@ -98,10 +152,13 @@ pub(crate) fn header_cells(nodes: &[HeaderNode]) -> Vec<HeaderCell> {
     out
 }
 
+/// A header label with its footnote markers.
+pub(crate) type Label = (String, Vec<char>);
+
 /// Path of labels (root..leaf) for each leaf.
-pub(crate) fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<String>> {
-    fn walk(n: &HeaderNode, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
-        prefix.push(n.label.clone());
+pub(crate) fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<Label>> {
+    fn walk(n: &HeaderNode, prefix: &mut Vec<Label>, out: &mut Vec<Vec<Label>>) {
+        prefix.push((n.label.clone(), n.footnotes.clone()));
         if n.children.is_empty() {
             out.push(prefix.clone());
         } else {
@@ -119,9 +176,9 @@ pub(crate) fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<String>> {
 }
 
 /// Row-header label to show at depth `d` of row `ri` (blank when it repeats the row above).
-pub(crate) fn row_label(paths: &[Vec<String>], ri: usize, d: usize) -> String {
-    let Some(p) = paths.get(ri) else { return String::new() };
-    let Some(l) = p.get(d) else { return String::new() };
+pub(crate) fn row_label(paths: &[Vec<Label>], ri: usize, d: usize) -> Label {
+    let Some(p) = paths.get(ri) else { return Label::default() };
+    let Some(l) = p.get(d) else { return Label::default() };
     let repeat = d + 1 < p.len() && ri > 0 && paths[ri - 1].len() > d && paths[ri - 1][..=d] == p[..=d];
-    if repeat { String::new() } else { l.clone() }
+    if repeat { Label::default() } else { l.clone() }
 }

@@ -30,7 +30,12 @@ pub fn format_cell(c: &Cell) -> String {
 
 /// Footnote markers of a cell joined with ",", or "" when there are none.
 pub fn format_markers(c: &Cell) -> String {
-    c.footnotes.iter().map(char::to_string).collect::<Vec<_>>().join(",")
+    join_markers(&c.footnotes)
+}
+
+/// Footnote markers joined with ",", or "" when there are none (titles, headers, cells).
+pub fn join_markers(marks: &[char]) -> String {
+    marks.iter().map(char::to_string).collect::<Vec<_>>().join(",")
 }
 
 /// Cell text without footnote markers.

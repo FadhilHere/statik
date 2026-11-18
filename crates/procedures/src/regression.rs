@@ -1,5 +1,5 @@
 //! Linear Regression (SPSS REGRESSION, method Enter).
-use crate::cells::{check_numeric_ids, empty, foot, group, label, leaf, num, num_or_empty, text, warning};
+use crate::cells::{check_numeric_ids, empty, foot, group, label, leaf, marked, num, num_or_empty, text, warning};
 use dataset::{Column, Dataset, VarId, Variable};
 use output_model::{CellFormat, Chart, HeaderNode, OutputItem, Table};
 use stat_core::dist::normal_cdf;
@@ -28,7 +28,7 @@ pub struct RegressionOptions {
 }
 
 fn model_rows(children: Vec<String>) -> Vec<HeaderNode> {
-    vec![HeaderNode { label: "1".into(), children: children.into_iter().map(|c| leaf(&c)).collect() }]
+    vec![HeaderNode { label: "1".into(), footnotes: vec![], children: children.into_iter().map(|c| leaf(&c)).collect() }]
 }
 
 const F3: CellFormat = CellFormat::Fixed(3);
@@ -109,7 +109,7 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
     if any_plot || any_save {
         out.push(OutputItem::Table(residual_stats_table(&fit, &dep_note)));
     }
-    let sub = format!("\n{dep_note}");
+    let sub = Some(dep_note.clone());
     if fit.z_residuals.iter().any(|v| !v.is_finite()) {
         out.push(OutputItem::Warning(
             "Regression: the fit is perfect (residual sum of squares is zero). Statistics that depend on \
@@ -127,7 +127,8 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
         .collect();
     if opt.plot_hist && !zres.is_empty() {
         out.push(OutputItem::Chart(Chart::Histogram {
-            title: format!("Histogram{sub}"),
+            title: "Histogram".into(),
+            subtitle: sub.clone(),
             values: zres.clone(),
             normal_curve: true,
         }));
@@ -137,14 +138,16 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
         z.sort_by(f64::total_cmp);
         let n = z.len() as f64;
         out.push(OutputItem::Chart(Chart::PPPlot {
-            title: format!("Normal P-P Plot of Regression Standardized Residual{sub}"),
+            title: "Normal P-P Plot of Regression Standardized Residual".into(),
+            subtitle: sub.clone(),
             observed_cum: (1..=z.len()).map(|i| i as f64 / (n + 1.0)).collect(),
             expected_cum: z.iter().map(|&v| normal_cdf(v)).collect(),
         }));
     }
     if opt.plot_zpred_sresid && !points.is_empty() {
         out.push(OutputItem::Chart(Chart::Scatter {
-            title: format!("Scatterplot{sub}"),
+            title: "Scatterplot".into(),
+            subtitle: sub,
             x_label: "Regression Standardized Predicted Value".into(),
             y_label: "Regression Studentized Residual".into(),
             points,
@@ -160,6 +163,7 @@ fn entered_table(rev: &[String], dep_note: &str, any_excluded: bool) -> Table {
     let note_b = if any_excluded { "Tolerance = .000 limit reached." } else { "All requested variables entered." };
     Table {
         title: "Variables Entered/Removed".into(),
+        title_footnotes: vec!['a'],
         col_headers: vec![leaf("Variables Entered"), leaf("Variables Removed"), leaf("Method")],
         row_headers: vec![leaf("1")],
         cells: vec![vec![foot(text(&rev.join(", ")), 'b'), text("."), text("Enter")]],
@@ -177,6 +181,7 @@ fn summary_table(fit: &OlsFit, opt: &RegressionOptions, pred_note: &str, dep_not
     }
     Table {
         title: "Model Summary".into(),
+        title_footnotes: vec!['b'],
         col_headers: cols,
         row_headers: vec![leaf("1")],
         cells: vec![row],
@@ -190,15 +195,20 @@ fn anova_table(fit: &OlsFit, pred_note: &str, dep_note: &str) -> Table {
     let count = |v: usize| num(v as f64, CellFormat::Count);
     Table {
         title: "ANOVA".into(),
+        title_footnotes: vec!['a'],
         col_headers: ["Sum of Squares", "df", "Mean Square", "F", "Sig."].map(leaf).to_vec(),
-        row_headers: model_rows(vec!["Regression".into(), "Residual".into(), "Total".into()]),
+        row_headers: vec![HeaderNode {
+            label: "1".into(),
+            footnotes: vec![],
+            children: vec![marked(leaf("Regression"), &['b']), leaf("Residual"), leaf("Total")],
+        }],
         cells: vec![
             vec![
                 num(fit.ss_reg, F3),
                 count(fit.df_reg),
                 num(ms_reg, F3),
                 num(fit.f, F3),
-                foot(num(fit.f_sig, CellFormat::Sig), 'b'),
+                num(fit.f_sig, CellFormat::Sig),
             ],
             vec![num(fit.ss_res, F3), count(fit.df_res), num(ms_res, F3), empty(), empty()],
             vec![num(fit.ss_reg + fit.ss_res, F3), count(fit.df_reg + fit.df_res), empty(), empty(), empty()],
@@ -237,6 +247,7 @@ fn coef_table(fit: &OlsFit, opt: &RegressionOptions, kept_labels: &[String], dep
         .collect();
     Table {
         title: "Coefficients".into(),
+        title_footnotes: vec!['a'],
         col_headers: cols,
         row_headers: model_rows(names),
         cells,
@@ -281,6 +292,7 @@ fn excluded_table(
         .collect();
     Table {
         title: "Excluded Variables".into(),
+        title_footnotes: vec!['a'],
         col_headers: vec![
             leaf("Beta In"),
             leaf("t"),
@@ -306,6 +318,7 @@ fn collin_table(fit: &OlsFit, kept_labels: &[String], dep_note: &str) -> Table {
         .collect();
     Table {
         title: "Collinearity Diagnostics".into(),
+        title_footnotes: vec!['a'],
         col_headers: vec![leaf("Eigenvalue"), leaf("Condition Index"), group("Variance Proportions", &names)],
         row_headers: model_rows((1..=fit.eigenvalues.len()).map(|d| d.to_string()).collect()),
         cells,
@@ -332,6 +345,7 @@ fn residual_stats_table(fit: &OlsFit, dep_note: &str) -> Table {
         .collect();
     Table {
         title: "Residuals Statistics".into(),
+        title_footnotes: vec!['a'],
         col_headers: ["Minimum", "Maximum", "Mean", "Std. Deviation", "N"].map(leaf).to_vec(),
         row_headers: rows.iter().map(|(l, _)| leaf(l)).collect(),
         cells,

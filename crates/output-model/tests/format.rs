@@ -35,8 +35,9 @@ fn count_nan_and_footnotes() {
 }
 
 fn table(foot: bool) -> Table {
-    let h = |s: &str| HeaderNode { label: s.into(), children: vec![] };
+    let h = |s: &str| HeaderNode { label: s.into(), footnotes: vec![], children: vec![] };
     Table {
+        title_footnotes: vec![],
         title: "Uji <A>".into(),
         col_headers: vec![h("Statistik"), h("Sig.")],
         row_headers: vec![h("X"), h("Y")],
@@ -64,7 +65,7 @@ fn text_table() {
     let t = render_text(&[
         OutputItem::Title("Judul".into()),
         OutputItem::Table(table(true)),
-        OutputItem::Chart(Chart::Scatter { title: "S".into(), x_label: "x".into(), y_label: "y".into(), points: vec![] }),
+        OutputItem::Chart(Chart::Scatter { title: "S".into(), subtitle: None, x_label: "x".into(), y_label: "y".into(), points: vec![] }),
     ]);
     assert!(t.contains("Judul"));
     assert!(t.contains("-.358"));
@@ -75,9 +76,9 @@ fn text_table() {
 #[test]
 fn nested_headers() {
     let mut t = table(false);
-    t.col_headers = vec![HeaderNode { label: "Grup".into(), children: vec![
-        HeaderNode { label: "A".into(), children: vec![] },
-        HeaderNode { label: "B".into(), children: vec![] }] }];
+    t.col_headers = vec![HeaderNode { label: "Grup".into(), footnotes: vec![], children: vec![
+        HeaderNode { label: "A".into(), footnotes: vec![], children: vec![] },
+        HeaderNode { label: "B".into(), footnotes: vec![], children: vec![] }] }];
     let html = render_html(&[OutputItem::Table(t.clone())]);
     assert!(html.contains("colspan=\"2\""));
     let txt = render_text(&[OutputItem::Table(t)]);
@@ -108,8 +109,9 @@ fn multiple_markers_are_comma_joined() {
 }
 
 fn marked_table() -> Table {
-    let h = |s: &str| HeaderNode { label: s.into(), children: vec![] };
+    let h = |s: &str| HeaderNode { label: s.into(), footnotes: vec![], children: vec![] };
     Table {
+        title_footnotes: vec![],
         title: "T".into(),
         col_headers: vec![h("Sig.")],
         row_headers: vec![h("r"), h("s")],

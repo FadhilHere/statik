@@ -88,6 +88,7 @@ pub fn run_explore(ds: &Dataset, opt: &ExploreOptions) -> Vec<OutputItem> {
         for &j in &normal_rows {
             out.push(OutputItem::Chart(Chart::QQPlot {
                 title: format!("Normal Q-Q Plot of {}", labels[j]),
+                subtitle: None,
                 observed: data[j].clone(),
                 expected: blom_expected(&data[j]),
             }));
@@ -98,11 +99,13 @@ pub fn run_explore(ds: &Dataset, opt: &ExploreOptions) -> Vec<OutputItem> {
 
 fn case_summary(labels: &[String], valid: usize, total: usize) -> Table {
     let missing = total - valid;
-    let pair = |s: &str| HeaderNode { label: s.into(), children: vec![leaf("N"), leaf("Percent")] };
+    let pair = |s: &str| HeaderNode { label: s.into(), footnotes: vec![], children: vec![leaf("N"), leaf("Percent")] };
     Table {
         title: "Case Processing Summary".into(),
+        title_footnotes: vec![],
         col_headers: vec![HeaderNode {
             label: "Cases".into(),
+            footnotes: vec![],
             children: vec![pair("Valid"), pair("Missing"), pair("Total")],
         }],
         row_headers: labels.iter().map(|l| leaf(l)).collect(),
@@ -152,6 +155,7 @@ fn descriptives(labels: &[String], data: &[Vec<f64>], decimals: &[usize]) -> Tab
         cells.push(stat_se(d.kurtosis.unwrap_or(nan), F3, d.se_kurtosis.unwrap_or(nan), F3));
         let ci = HeaderNode {
             label: "95% Confidence Interval for Mean".into(),
+            footnotes: vec![],
             children: vec![leaf("Lower Bound"), leaf("Upper Bound")],
         };
         let mut children = vec![leaf("Mean"), ci];
@@ -170,10 +174,11 @@ fn descriptives(labels: &[String], data: &[Vec<f64>], decimals: &[usize]) -> Tab
             ]
             .map(leaf),
         );
-        row_headers.push(HeaderNode { label: labels[j].clone(), children });
+        row_headers.push(HeaderNode { label: labels[j].clone(), footnotes: vec![], children });
     }
     Table {
         title: "Descriptives".into(),
+        title_footnotes: vec![],
         col_headers: vec![leaf("Statistic"), leaf("Std. Error")],
         row_headers,
         cells,
@@ -224,10 +229,15 @@ fn normality_table(labels: &[String], data: &[Vec<f64>], which: &[usize]) -> (Ta
         footnotes.push(('*', LOWER_BOUND_NOTE.to_string()));
     }
     footnotes.push(('a', "Lilliefors Significance Correction".to_string()));
-    let triple = |s: &str| HeaderNode { label: s.into(), children: vec![leaf("Statistic"), leaf("df"), leaf("Sig.")] };
+    let triple = |s: &str, marks: &[char]| HeaderNode {
+        label: s.into(),
+        footnotes: marks.to_vec(),
+        children: vec![leaf("Statistic"), leaf("df"), leaf("Sig.")],
+    };
     let table = Table {
         title: "Tests of Normality".into(),
-        col_headers: vec![triple("Kolmogorov-Smirnov"), triple("Shapiro-Wilk")],
+        title_footnotes: vec![],
+        col_headers: vec![triple("Kolmogorov-Smirnov", &['a']), triple("Shapiro-Wilk", &[])],
         row_headers: which.iter().map(|&j| leaf(&labels[j])).collect(),
         cells,
         footnotes,

@@ -8,11 +8,11 @@ pub(crate) fn label(ds: &Dataset, id: VarId) -> String {
 }
 
 pub(crate) fn leaf(s: &str) -> HeaderNode {
-    HeaderNode { label: s.to_string(), children: vec![] }
+    HeaderNode { label: s.to_string(), footnotes: vec![], children: vec![] }
 }
 
 pub(crate) fn group(s: &str, children: &[&str]) -> HeaderNode {
-    HeaderNode { label: s.to_string(), children: children.iter().map(|c| leaf(c)).collect() }
+    HeaderNode { label: s.to_string(), footnotes: vec![], children: children.iter().map(|c| leaf(c)).collect() }
 }
 
 /// Numeric cell; a non-finite (undefined) statistic is shown as "." like SPSS system-missing.
@@ -49,9 +49,15 @@ pub(crate) fn fixed_plus(decimals: usize, extra: usize) -> CellFormat {
     CellFormat::Fixed((decimals + extra).min(16) as u8)
 }
 
+/// Attach footnote markers to a header node (SPSS superscript after the label).
+pub(crate) fn marked(mut n: HeaderNode, marks: &[char]) -> HeaderNode {
+    n.footnotes.extend_from_slice(marks);
+    n
+}
+
 /// Header node with arbitrary child nodes.
 pub(crate) fn parent(s: &str, children: Vec<HeaderNode>) -> HeaderNode {
-    HeaderNode { label: s.to_string(), children }
+    HeaderNode { label: s.to_string(), footnotes: vec![], children }
 }
 
 /// "Significance" header with One-Sided p / Two-Sided p sub-columns (SPSS 27+).
