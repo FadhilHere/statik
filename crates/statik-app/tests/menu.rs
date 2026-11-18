@@ -1,0 +1,204 @@
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
+use statik_app::StatikApp;
+use statik_app::menu::TOP_MENUS;
+use std::path::Path;
+
+fn harness() -> Harness<'static, StatikApp> {
+    Harness::builder()
+        .with_size(egui::vec2(1024.0, 700.0))
+        .with_theme(egui::Theme::Light)
+        .build_ui_state(|ui, app: &mut StatikApp| app.show(ui), StatikApp::default())
+}
+
+#[test]
+fn top_level_menus_in_spss_order() {
+    let h = harness();
+    let mut xs = Vec::new();
+    for label in TOP_MENUS {
+        let node = h.get_by_label(label);
+        assert!(!node.accesskit_node().is_disabled(), "{label} disabled");
+        xs.push(node.rect().left());
+    }
+    assert_eq!(
+        TOP_MENUS,
+        [
+            "File",
+            "Edit",
+            "View",
+            "Data",
+            "Transform",
+            "Analyze",
+            "Graphs",
+            "Utilities",
+            "Extensions",
+            "Window",
+            "Help"
+        ]
+    );
+    assert!(
+        xs.windows(2).all(|w| w[0] < w[1]),
+        "menus not left-to-right: {xs:?}"
+    );
+    // The main area shows the (empty) dataset size, the status bar the idle processor.
+    h.get_by_label("0 variables, 0 cases");
+    h.get_by_label("Statik Processor is ready");
+}
+
+#[test]
+fn analyze_regression_linear_enabled_glm_disabled() {
+    let mut h = harness();
+    h.get_by_label("Analyze").click();
+    h.run();
+    assert!(
+        h.get_by_label("General Linear Model")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(h.get_by_label("Reports").accesskit_node().is_disabled());
+    h.get_by_label("Regression").hover();
+    h.run();
+    let linear = h.get_by_label("Linear...");
+    assert!(!linear.accesskit_node().is_disabled());
+    assert!(
+        h.get_by_label("Curve Estimation...")
+            .accesskit_node()
+            .is_disabled()
+    );
+    linear.click();
+    h.run();
+    // Not implemented yet: a message names the dialog.
+    let m = h.state().state.message.clone().expect("message");
+    assert_eq!(m.title, "Linear Regression");
+    h.get_by_label("OK").click();
+    h.run();
+    assert!(h.state().state.message.is_none());
+}
+
+#[test]
+fn file_menu_items() {
+    let mut h = harness();
+    h.get_by_label("File").click();
+    h.run();
+    for l in ["Save", "Save As...", "Exit"] {
+        assert!(!h.get_by_label(l).accesskit_node().is_disabled(), "{l}");
+    }
+    assert!(h.get_by_label("Close").accesskit_node().is_disabled());
+    h.get_by_label("Import Data").hover();
+    h.run();
+    assert!(!h.get_by_label("CSV Data...").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Excel...").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Stata...").accesskit_node().is_disabled());
+}
+
+#[test]
+fn edit_undo_disabled_view_value_labels_toggles() {
+    let mut h = harness();
+    h.get_by_label("Edit").click();
+    h.run();
+    assert!(h.get_by_label("Undo").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Redo").accesskit_node().is_disabled());
+    h.get_by_label("View").click();
+    h.run();
+    h.get_by_label("Value Labels").click();
+    h.run();
+    assert!(h.state().state.value_labels);
+}
+
+#[test]
+fn help_about_and_window_output() {
+    let mut h = harness();
+    h.get_by_label("Help").click();
+    h.run();
+    h.get_by_label("About Statik").click();
+    h.run();
+    assert_eq!(
+        h.state().state.message.as_ref().unwrap().title,
+        "About Statik"
+    );
+    h.get_by_label("OK").click();
+    h.run();
+    h.get_by_label("Window").click();
+    h.run();
+    h.get_by_label("Output").click();
+    h.run();
+    assert!(h.state().state.show_output);
+}
+
+#[test]
+fn open_via_job_updates_main_area_and_blocks_while_busy() {
+    let mut h = harness();
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/data/skripsi60.csv");
+    let ctx = h.ctx.clone();
+    h.state_mut().dispatch(statik_app::Command::Open(p), &ctx);
+    assert!(h.state().busy().is_some());
+    // A second command while busy is ignored.
+    h.state_mut()
+        .dispatch(statik_app::Command::ToggleValueLabels, &ctx);
+    assert!(!h.state().state.value_labels);
+    h.state_mut().wait_for_job();
+    h.run();
+    assert!(h.state().busy().is_none());
+    h.get_by_label("5 variables, 60 cases");
+    assert!(
+        h.state()
+            .state
+            .title()
+            .starts_with("skripsi60.csv [DataSet1]")
+    );
+}
+
+#[test]
+fn error_shows_message_box() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .dispatch(statik_app::Command::Open("does/not/exist.sav".into()), &ctx);
+    h.state_mut().wait_for_job();
+    h.run();
+    h.get_by_label("Error");
+    h.get_by_label("OK").click();
+    h.run();
+    assert!(h.state().state.message.is_none());
+}
+
+#[test]
+fn icon_is_white_s_on_blue() {
+    use statik_app::icon::{ICON_SIZE, icon_rgba};
+    let px = icon_rgba(ICON_SIZE);
+    assert_eq!(px.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
+    let at = |x: u32, y: u32| &px[((y * ICON_SIZE + x) * 4) as usize..][..4];
+    assert_eq!(at(0, 0)[3], 0, "corner transparent");
+    assert_eq!(at(20, 128), &[0x1f, 0x3a, 0x6b, 255], "blue background");
+    assert_eq!(
+        at(128, 40 + 14),
+        &[255, 255, 255, 255],
+        "top stroke of the S is white"
+    );
+    assert_eq!(
+        at(128, 128),
+        &[255, 255, 255, 255],
+        "middle stroke of the S is white"
+    );
+    // Write/compare the checked-in asset.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icon.png");
+    let img = image::RgbaImage::from_raw(ICON_SIZE, ICON_SIZE, px).unwrap();
+    if path.exists() {
+        let saved = image::open(&path).unwrap().to_rgba8();
+        assert!(
+            saved == img,
+            "assets/icon.png is stale; delete it and rerun this test"
+        );
+    } else {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        img.save(&path).unwrap();
+    }
+}
+
+/// Snapshot of the empty main window (rendered with wgpu; needs a GPU or software adapter).
+#[test]
+fn snapshot_empty_window() {
+    let mut h = harness();
+    h.run();
+    h.snapshot("empty_window");
+}

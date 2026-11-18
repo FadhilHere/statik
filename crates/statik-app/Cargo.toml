@@ -1,0 +1,27 @@
+[package]
+name = "statik-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "statik-app"
+path = "src/main.rs"
+
+[lib]
+name = "statik_app"
+path = "src/lib.rs"
+
+[dependencies]
+dataset = { path = "../dataset" }
+sav-io = { path = "../sav-io" }
+output-model = { path = "../output-model" }
+procedures = { path = "../procedures" }
+eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "glow"] }
+egui = "0.35"
+egui_extras = "0.35"
+rfd = "0.18"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.35", features = ["wgpu", "snapshot"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

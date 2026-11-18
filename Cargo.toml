@@ -8,6 +8,7 @@ members = [
     "crates/statik-cli",
     "crates/sav-io",
     "crates/transform",
+    "crates/statik-app",
 ]
 
 [workspace.package]

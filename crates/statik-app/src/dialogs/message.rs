@@ -1,0 +1,40 @@
+//! Modal message box (errors, warnings such as `.sav` read notes, About).
+use crate::state::{Message, MessageKind};
+
+/// Show `msg` as a modal box with an OK button. Returns true once it is dismissed (OK, Enter,
+/// Escape or a click outside); the caller then clears it.
+pub fn message_box(ctx: &egui::Context, msg: &Message) -> bool {
+    let mut ok = false;
+    let resp = egui::Modal::new(egui::Id::new("statik-message")).show(ctx, |ui| {
+        ui.set_min_width(320.0);
+        ui.set_max_width(520.0);
+        ui.horizontal(|ui| {
+            let (icon, color) = match msg.kind {
+                MessageKind::Info => ("i", egui::Color32::from_rgb(0x2b, 0x5c, 0xa8)),
+                MessageKind::Warning => ("!", egui::Color32::from_rgb(0xd8, 0x9b, 0x00)),
+                MessageKind::Error => ("x", egui::Color32::from_rgb(0xc0, 0x30, 0x30)),
+            };
+            ui.label(egui::RichText::new(icon).strong().size(22.0).color(color));
+            ui.heading(&msg.title);
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                ui.label(&msg.text);
+            });
+        ui.separator();
+        ui.vertical_centered(|ui| {
+            if ui
+                .add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0)))
+                .clicked()
+            {
+                ok = true;
+            }
+        });
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            ok = true;
+        }
+    });
+    ok || resp.should_close()
+}
