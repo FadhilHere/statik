@@ -215,3 +215,57 @@ fn minimal_options_and_labels() {
     assert!(table(&items, "ANOVA").footnotes.iter().any(|(_, s)| s == "Dependent Variable: Kepuasan"));
     assert_eq!(ds.n_vars(), n_vars);
 }
+
+fn small_ds(cols: &[(&str, Vec<f64>)]) -> Dataset {
+    let mut ds = Dataset::new();
+    for (name, v) in cols {
+        ds.add_variable(Variable::numeric(name), Column::Numeric(v.clone())).unwrap();
+    }
+    ds
+}
+
+#[test]
+fn zero_variance_dependent_warns() {
+    let mut ds = small_ds(&[("y", vec![2.7; 6]), ("x", vec![1.0, 2.0, 3.0, 5.0, 4.0, 6.0])]);
+    let opt = all_on(&ds, "y", &["x"]);
+    let items = run_regression(&mut ds, &opt);
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        OutputItem::Warning(w) => assert!(w.contains("zero variance"), "{w}"),
+        other => panic!("expected warning, got {other:?}"),
+    }
+    assert_eq!(ds.n_vars(), 2);
+}
+
+#[test]
+fn perfect_fit_no_nonfinite_cells_or_chart_values() {
+    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let y: Vec<f64> = x.iter().map(|v| 1.5 + 0.3 * v).collect();
+    let mut ds = small_ds(&[("y", y), ("x", x)]);
+    let opt = all_on(&ds, "y", &["x"]);
+    let items = run_regression(&mut ds, &opt);
+    assert!(items.iter().any(|i| matches!(i, OutputItem::Warning(_))));
+    assert!(tables(&items).len() >= 4);
+    for t in tables(&items) {
+        for row in &t.cells {
+            for c in row {
+                if let CellValue::Num(v) = c.value {
+                    assert!(v.is_finite(), "non-finite cell in {}", t.title);
+                }
+            }
+        }
+    }
+    for i in &items {
+        if let OutputItem::Chart(c) = i {
+            let ok = match c {
+                Chart::Histogram { values, .. } => !values.is_empty() && values.iter().all(|v| v.is_finite()),
+                Chart::PPPlot { observed_cum, expected_cum, .. } => {
+                    !observed_cum.is_empty() && observed_cum.iter().chain(expected_cum).all(|v| v.is_finite())
+                }
+                Chart::Scatter { points, .. } => !points.is_empty() && points.iter().all(|(a, b)| a.is_finite() && b.is_finite()),
+                Chart::QQPlot { .. } => true,
+            };
+            assert!(ok, "chart with non-finite or no data: {c:?}");
+        }
+    }
+}

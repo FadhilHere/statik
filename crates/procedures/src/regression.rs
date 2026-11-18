@@ -43,8 +43,9 @@ fn model_rows(children: Vec<String>) -> Vec<HeaderNode> {
     vec![HeaderNode { label: "1".into(), children: children.into_iter().map(|c| leaf(&c)).collect() }]
 }
 
+/// Numeric cell; a non-finite (undefined) statistic is shown as "." like SPSS system-missing.
 fn num(v: f64, format: CellFormat) -> Cell {
-    Cell { value: CellValue::Num(v), format, footnotes: vec![] }
+    if v.is_finite() { Cell { value: CellValue::Num(v), format, footnotes: vec![] } } else { text(".") }
 }
 
 /// Numeric cell, or an empty cell when the value is NaN (statistic not applicable).
@@ -107,6 +108,12 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
         Err(OlsError::NoPredictors) => {
             return warning("Regression: no independent variable passed the tolerance test. No analysis was performed.");
         }
+        Err(OlsError::ZeroVarianceDependent) => {
+            return warning(format!(
+                "Regression: the dependent variable {} has zero variance. No statistics are computed.",
+                ds.var(opt.dependent).name
+            ));
+        }
         Err(e) => return warning(format!("Regression: {e}.")),
     };
 
@@ -136,15 +143,30 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
         out.push(OutputItem::Table(residual_stats_table(&fit, &dep_note)));
     }
     let sub = format!("\n{dep_note}");
-    if opt.plot_hist {
+    if fit.z_residuals.iter().any(|v| !v.is_finite()) {
+        out.push(OutputItem::Warning(
+            "Regression: the fit is perfect (residual sum of squares is zero). Statistics that depend on \
+             the residual variance are not computed and residual plots are not produced."
+                .into(),
+        ));
+    }
+    let zres: Vec<f64> = fit.z_residuals.iter().copied().filter(|v| v.is_finite()).collect();
+    let points: Vec<(f64, f64)> = fit
+        .z_predicted
+        .iter()
+        .copied()
+        .zip(fit.studentized_residuals.iter().copied())
+        .filter(|(a, b)| a.is_finite() && b.is_finite())
+        .collect();
+    if opt.plot_hist && !zres.is_empty() {
         out.push(OutputItem::Chart(Chart::Histogram {
             title: format!("Histogram{sub}"),
-            values: fit.z_residuals.clone(),
+            values: zres.clone(),
             normal_curve: true,
         }));
     }
-    if opt.plot_pp {
-        let mut z = fit.z_residuals.clone();
+    if opt.plot_pp && !zres.is_empty() {
+        let mut z = zres;
         z.sort_by(f64::total_cmp);
         let n = z.len() as f64;
         out.push(OutputItem::Chart(Chart::PPPlot {
@@ -153,12 +175,12 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
             expected_cum: z.iter().map(|&v| normal_cdf(v)).collect(),
         }));
     }
-    if opt.plot_zpred_sresid {
+    if opt.plot_zpred_sresid && !points.is_empty() {
         out.push(OutputItem::Chart(Chart::Scatter {
             title: format!("Scatterplot{sub}"),
             x_label: "Regression Standardized Predicted Value".into(),
             y_label: "Regression Studentized Residual".into(),
-            points: fit.z_predicted.iter().copied().zip(fit.studentized_residuals.iter().copied()).collect(),
+            points,
         }));
     }
     if let Err(msg) = save_vars(ds, &fit, &rows, opt.save) {

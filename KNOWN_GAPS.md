@@ -11,3 +11,9 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **Excluded Variables:** for an exact linear combination (tolerance < 1e-10) Beta In, t, Sig., Partial Correlation and VIF are shown as "."; the entered-variables footnote becomes "Tolerance = .000 limit reached." Wording and which cells SPSS blanks are unverified.
 - Table-title footnote markers (e.g. "Model Summary^b", "ANOVA^a") are not attached to titles; the footnote text is still listed.
 - No Descriptive Statistics / Correlations tables, no confidence intervals, no casewise diagnostics, no stepwise methods, no weights, no "no constant" option.
+- SPSS's second entry criterion is not implemented. SPSS also refuses a candidate predictor when entering it would push an already-entered predictor's tolerance below 0.0001. Only the candidate's own tolerance against the predictors already entered is checked here.
+- The `TooFewCases` check counts requested predictors, not those retained after the tolerance exclusion.
+- Zero-variance and perfect-fit handling:
+  - A constant dependent variable produces a single warning and no tables. The wording is SPSS-like but not verified.
+  - A perfect fit shows "." for t, Sig., F, Durbin-Watson and Std. Residual, adds a warning, and skips the residual charts.
+  - A predictor counts as constant when max == min or its centred SS ≤ 1e-12 × raw SS. Such a predictor is excluded with tolerance 0.

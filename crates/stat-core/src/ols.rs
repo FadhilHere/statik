@@ -54,6 +54,8 @@ pub enum OlsError {
     LengthMismatch,
     /// Every predictor was excluded (or none was given).
     NoPredictors,
+    /// The dependent variable is constant among the cases used.
+    ZeroVarianceDependent,
 }
 
 impl std::fmt::Display for OlsError {
@@ -62,6 +64,7 @@ impl std::fmt::Display for OlsError {
             OlsError::TooFewCases => "too few cases for the number of predictors",
             OlsError::LengthMismatch => "predictor length differs from dependent length",
             OlsError::NoPredictors => "no predictors could be entered",
+            OlsError::ZeroVarianceDependent => "the dependent variable has zero variance",
         })
     }
 }
@@ -97,6 +100,18 @@ fn ls_solve(a: &DMatrix<f64>, y: &DVector<f64>) -> Option<(DVector<f64>, DMatrix
     Some((b, q, r))
 }
 
+/// True when `raw` is constant: max == min, or its centred sum of squares is rounding
+/// noise relative to its raw sum of squares (mean of a non-integer constant is inexact).
+fn zero_variance(raw: &[f64]) -> bool {
+    let (lo, hi) = raw.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| (l.min(v), h.max(v)));
+    if lo == hi {
+        return true;
+    }
+    let raw_ss: f64 = raw.iter().map(|v| v * v).sum();
+    let c_ss: f64 = centered(raw).iter().map(|v| v * v).sum();
+    c_ss <= 1e-12 * raw_ss
+}
+
 /// Tolerance of `x` (centred) against centred columns `others`: 1 - R².
 fn tolerance_of(x: &[f64], others: &[Vec<f64>]) -> f64 {
     let n = x.len();
@@ -130,6 +145,9 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
     if n < xs.len() + 2 {
         return Err(OlsError::TooFewCases);
     }
+    if zero_variance(y) {
+        return Err(OlsError::ZeroVarianceDependent);
+    }
 
     // Entry-order tolerance screening.
     let all_c: Vec<Vec<f64>> = xs.iter().map(|x| centered(x)).collect();
@@ -137,7 +155,7 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
     let mut excluded = vec![];
     for j in 0..xs.len() {
         let others: Vec<Vec<f64>> = kept.iter().map(|&k| all_c[k].clone()).collect();
-        if tolerance_of(&all_c[j], &others) < TOLERANCE_LIMIT {
+        if zero_variance(xs[j]) || tolerance_of(&all_c[j], &others) < TOLERANCE_LIMIT {
             excluded.push(j);
         } else {
             kept.push(j);
@@ -181,7 +199,10 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
     let var_b0 = ms_res * (1.0 / nf + (xb.transpose() * &cinv * &xb)[(0, 0)]);
     let mut se = vec![var_b0.sqrt()];
     se.extend((0..k).map(|j| (ms_res * cinv[(j, j)]).sqrt()));
-    let t: Vec<f64> = b.iter().zip(&se).map(|(b, s)| b / s).collect();
+    // Perfect fit: statistics that divide by the residual variance are undefined (NaN).
+    let perfect = ss_res <= 1e-24 * sst;
+    let undefined_if_perfect = |v: f64| if perfect { f64::NAN } else { v };
+    let t: Vec<f64> = b.iter().zip(&se).map(|(b, s)| undefined_if_perfect(b / s)).collect();
     let sig: Vec<f64> = t.iter().map(|&t| t_sig_two_tailed(t, df_res as f64)).collect();
 
     let sd_y = sd(y);
@@ -198,16 +219,16 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
 
     // Durbin-Watson.
     let dw_num: f64 = residuals.windows(2).map(|w| (w[1] - w[0]) * (w[1] - w[0])).sum();
-    let durbin_watson = dw_num / ss_res;
+    let durbin_watson = undefined_if_perfect(dw_num / ss_res);
 
     // Standardized / studentized values.
     let (mp, sp) = (mean(&predicted), sd(&predicted));
     let z_predicted: Vec<f64> = predicted.iter().map(|p| (p - mp) / sp).collect();
-    let z_residuals: Vec<f64> = residuals.iter().map(|e| e / se_est).collect();
+    let z_residuals: Vec<f64> = residuals.iter().map(|e| undefined_if_perfect(e / se_est)).collect();
     let studentized_residuals: Vec<f64> = (0..n)
         .map(|i| {
             let h = 1.0 / nf + q.row(i).norm_squared();
-            residuals[i] / (se_est * (1.0 - h).sqrt())
+            undefined_if_perfect(residuals[i] / (se_est * (1.0 - h).sqrt()))
         })
         .collect();
 
@@ -234,6 +255,7 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
     let variance_proportions: Vec<Vec<f64>> =
         phi.iter().map(|row| row.iter().zip(&totals).map(|(v, t)| v / t).collect()).collect();
 
+    let f = undefined_if_perfect(f);
     Ok(OlsFit {
         b,
         se,
@@ -290,7 +312,8 @@ pub fn candidate_stats(y: &[f64], entered: &[&[f64]], candidate: &[f64]) -> Cand
     let n = y.len();
     let ent_c: Vec<Vec<f64>> = entered.iter().map(|x| centered(x)).collect();
     let cand_c = centered(candidate);
-    let tolerance = tolerance_of(&cand_c, &ent_c);
+    let const_cand = zero_variance(candidate);
+    let tolerance = if const_cand { 0.0 } else { tolerance_of(&cand_c, &ent_c) };
 
     let mut all = ent_c.clone();
     all.push(cand_c.clone());
@@ -300,7 +323,8 @@ pub fn candidate_stats(y: &[f64], entered: &[&[f64]], candidate: &[f64]) -> Cand
                 all.iter().enumerate().filter(|&(i, _)| i != j).map(|(_, v)| v.clone()).collect();
             tolerance_of(&all[j], &others)
         })
-        .fold(f64::INFINITY, f64::min);
+        .fold(f64::INFINITY, f64::min)
+        .min(tolerance);
 
     let undefined = CandidateStats {
         beta_in: f64::NAN,

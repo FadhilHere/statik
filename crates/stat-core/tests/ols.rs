@@ -75,25 +75,25 @@ fn skripsi60_matches_statsmodels() {
         let exp = arr(&r, k);
         assert_eq!(got.len(), exp.len(), "{k} len");
         for (i, (&g, &e)) in got.iter().zip(&exp).enumerate() {
-            rel(g, e, if k == "pvalues" { 1e-6 } else { tol }, &format!("{k}[{i}]"));
+            rel(g, e, if k == "pvalues" { 1e-9 } else { tol }, &format!("{k}[{i}]"));
         }
     }
     rel(f.r2, num(&r, "rsquared"), tol, "r2");
     rel(f.r, num(&r, "rsquared").sqrt(), tol, "r");
     rel(f.adj_r2, num(&r, "rsquared_adj"), tol, "adj_r2");
     rel(f.f, num(&r, "fvalue"), tol, "f");
-    rel(f.f_sig, num(&r, "f_pvalue"), 1e-6, "f_sig");
+    rel(f.f_sig, num(&r, "f_pvalue"), 1e-9, "f_sig");
     rel(f.durbin_watson, num(&r, "durbin_watson"), tol, "dw");
     let vif = arr(&r, "vif");
     assert!(f.vif[0].is_nan() && f.tolerance[0].is_nan() && f.beta[0].is_nan());
     for j in 0..3 {
-        rel(f.vif[j + 1], vif[j], 1e-8, &format!("vif[{j}]"));
-        rel(f.tolerance[j + 1], 1.0 / vif[j], 1e-8, &format!("tol[{j}]"));
+        rel(f.vif[j + 1], vif[j], 1e-9, &format!("vif[{j}]"));
+        rel(f.tolerance[j + 1], 1.0 / vif[j], 1e-9, &format!("tol[{j}]"));
     }
     let sres = arr(&r, "sresid");
     assert_eq!(f.studentized_residuals.len(), 60);
     for (i, (&g, &e)) in f.studentized_residuals.iter().zip(&sres).enumerate() {
-        rel(g, e, 1e-8, &format!("sresid[{i}]"));
+        rel(g, e, 1e-9, &format!("sresid[{i}]"));
     }
     // sums of squares, residuals, predicted, z-scores
     assert_eq!((f.df_reg, f.df_res), (3, 56));
@@ -169,7 +169,7 @@ fn candidate_stats_match_full_model() {
     let full = ols(y, &[x1, x2, x3]).unwrap();
     let s = candidate_stats(y, &[x1, x2], x3);
     rel(s.t, arr(&r, "tvalues")[3], 1e-9, "t");
-    rel(s.sig, arr(&r, "pvalues")[3], 1e-6, "sig");
+    rel(s.sig, arr(&r, "pvalues")[3], 1e-9, "sig");
     rel(s.beta_in, full.beta[3], 1e-9, "beta in");
     rel(s.tolerance, full.tolerance[3], 1e-9, "tolerance");
     rel(s.vif, full.vif[3], 1e-9, "vif");
@@ -187,4 +187,43 @@ fn candidate_stats_perfectly_collinear() {
     let s = candidate_stats(col(&h, &c, "y"), &[col(&h, &c, "x1")], col(&h, &c, "x1dbl"));
     assert!(s.tolerance < 1e-4);
     assert!(s.beta_in.is_nan() && s.t.is_nan() && s.sig.is_nan() && s.partial.is_nan());
+}
+
+#[test]
+fn non_integer_constant_predictor_excluded() {
+    let (h, c) = read_csv("edge_cases.csv");
+    let y = col(&h, &c, "y");
+    let x1 = col(&h, &c, "x1");
+    let k = vec![2.7; 12];
+    for (xs, excl) in [(vec![&k[..], x1], 0usize), (vec![x1, &k[..]], 1usize)] {
+        let f = ols(y, &xs).unwrap();
+        assert_eq!(f.excluded, vec![excl]);
+        assert_eq!(f.b.len(), 2);
+        assert!(f.se.iter().all(|s| s.is_finite() && *s < 1.0), "se {:?}", f.se);
+        assert!(f.condition_index.iter().all(|c| c.is_finite()));
+        rel(f.b[1], 1.991, 1e-3, "slope of x1");
+    }
+    let s = stat_core::ols::candidate_stats(y, &[x1], &k);
+    assert!(s.tolerance < 1e-4 && s.t.is_nan());
+}
+
+#[test]
+fn zero_variance_dependent_is_error() {
+    let (h, c) = read_csv("edge_cases.csv");
+    let k = vec![2.7; 12];
+    assert!(matches!(ols(&k, &[col(&h, &c, "x1")]), Err(OlsError::ZeroVarianceDependent)));
+}
+
+#[test]
+fn perfect_fit_has_nan_not_inf() {
+    let x = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let y: Vec<f64> = x.iter().map(|v| 1.5 + 0.3 * v).collect();
+    let f = ols(&y, &[&x]).unwrap();
+    rel(f.b[1], 0.3, 1e-12, "slope");
+    assert!(f.r2 > 1.0 - 1e-12);
+    for v in f.t.iter().chain(&f.sig).chain(&f.z_residuals).chain(&f.studentized_residuals) {
+        assert!(v.is_nan(), "expected NaN, got {v}");
+    }
+    assert!(f.f.is_nan() && f.f_sig.is_nan() && f.durbin_watson.is_nan());
+    assert!(f.z_predicted.iter().all(|v| v.is_finite()));
 }
