@@ -7,7 +7,7 @@ pub mod ols;
 pub mod runs;
 pub mod ttest;
 
-pub use describe::{Describe, describe, percentile_haverage, trimmed_mean_5};
+pub use describe::{Describe, describe, is_constant_computed, percentile_haverage, trimmed_mean_5};
 pub use dist::{f_sig, normal_cdf, normal_quantile, t_quantile, t_sig_two_tailed};
 pub use normality::{KsResult, SwResult, lilliefors, shapiro_wilk};
 pub use ols::{CandidateStats, OlsError, OlsFit, candidate_stats, ols};

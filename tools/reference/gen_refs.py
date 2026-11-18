@@ -223,8 +223,24 @@ def case_runs():
     }
 
 
+def case_t_quantile_large_df():
+    from scipy import stats
+
+    dfs = [1e5, 1e6]
+    ps = [0.95, 0.975, 0.995]
+    return {
+        "case": "t_quantile_large_df",
+        "values": {
+            "df": dfs,
+            "p": ps,
+            "q": [[float(stats.t.ppf(p, df)) for p in ps] for df in dfs],
+        },
+    }
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality, case_ttest, case_anova, case_runs]
+CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality, case_ttest, case_anova, case_runs,
+         case_t_quantile_large_df]
 
 
 def main():

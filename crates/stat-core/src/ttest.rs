@@ -1,5 +1,5 @@
 //! Student t tests (one-sample, independent, paired) and Levene's test (mean-centred), SPSS definitions.
-use crate::describe::describe;
+use crate::describe::{describe, is_constant_computed};
 use crate::dist::{f_sig, t_quantile, t_sig_two_tailed};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,7 +67,9 @@ pub fn levene_mean(groups: &[&[f64]]) -> (f64, f64, usize, usize) {
         ssw += g.iter().map(|v| (v - m) * (v - m)).sum::<f64>();
     }
     let (df1, df2) = (k - 1, n - k);
-    if ssw == 0.0 {
+    // Deviations equal on paper but not bitwise (e.g. {0.1, 0.3}) leave rounding noise in ssw.
+    let sz2: f64 = z.iter().flatten().map(|v| v * v).sum();
+    if ssw <= 1e-24 * sz2 {
         return (f64::NAN, f64::NAN, df1, df2);
     }
     let f = (ssb / df1 as f64) / (ssw / df2 as f64);
@@ -105,6 +107,11 @@ pub fn paired_t(a: &[f64], b: &[f64], conf: f64) -> Option<PairedResult> {
         return None;
     }
     let diff: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
+    // Differences equal on paper can differ in the last bits (1.1 - 1 vs 6.1 - 6).
+    let scale = a.iter().chain(b).fold(0.0f64, |m, v| m.max(v.abs()));
+    if is_constant_computed(&diff, scale) {
+        return None;
+    }
     let test = one_sample_t(&diff, 0.0, conf)?;
     let (corr, corr_sig) = paired_corr(a, b);
     let sd_diff = test.se_diff * (a.len() as f64).sqrt();

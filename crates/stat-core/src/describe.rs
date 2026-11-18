@@ -107,3 +107,10 @@ pub fn trimmed_mean_5(sorted: &[f64]) -> f64 {
     }
     num / den
 }
+
+/// True when `values`, computed from inputs whose largest magnitude is `scale`, are constant up
+/// to floating-point rounding: max - min <= 8·ε·scale. Empty input counts as constant.
+pub fn is_constant_computed(values: &[f64], scale: f64) -> bool {
+    let (lo, hi) = values.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| (l.min(v), h.max(v)));
+    values.is_empty() || hi - lo <= 8.0 * f64::EPSILON * scale.abs()
+}

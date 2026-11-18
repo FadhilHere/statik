@@ -2,6 +2,7 @@
 //!
 //! The fit uses Householder QR on mean-centred predictors (numerically robust for
 //! ill-conditioned data such as Longley) plus one step of iterative refinement.
+use crate::describe::is_constant_computed;
 use crate::dist::{f_sig, t_sig_two_tailed};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 
@@ -100,16 +101,16 @@ fn ls_solve(a: &DMatrix<f64>, y: &DVector<f64>) -> Option<(DVector<f64>, DMatrix
     Some((b, q, r))
 }
 
-/// True when `raw` is constant: max == min, or its centred sum of squares is rounding
-/// noise relative to its raw sum of squares (mean of a non-integer constant is inexact).
+/// True when `raw` is constant: max == min, or its centred sum of squares is no larger than the
+/// rounding noise of centring (a few ulps of max |v| per case).
 fn zero_variance(raw: &[f64]) -> bool {
     let (lo, hi) = raw.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| (l.min(v), h.max(v)));
     if lo == hi {
         return true;
     }
-    let raw_ss: f64 = raw.iter().map(|v| v * v).sum();
+    let ulp_noise = 4.0 * f64::EPSILON * lo.abs().max(hi.abs());
     let c_ss: f64 = centered(raw).iter().map(|v| v * v).sum();
-    c_ss <= 1e-12 * raw_ss
+    c_ss <= raw.len() as f64 * ulp_noise * ulp_noise
 }
 
 /// Tolerance of `x` (centred) against centred columns `others`: 1 - R².
@@ -188,7 +189,8 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
     let df_res = n - k - 1;
     let ms_res = ss_res / df_res as f64;
     let se_est = ms_res.sqrt();
-    let r2 = if sst > 0.0 { 1.0 - ss_res / sst } else { f64::NAN };
+    // A zero slope can leave r2 a rounding step below 0; clamp so R = sqrt(r2) is defined.
+    let r2 = if sst > 0.0 { (1.0 - ss_res / sst).max(0.0) } else { f64::NAN };
     let adj_r2 = 1.0 - (1.0 - r2) * (nf - 1.0) / df_res as f64;
     let f = (ss_reg / df_reg as f64) / ms_res;
 
@@ -223,7 +225,13 @@ pub fn ols(y: &[f64], xs: &[&[f64]]) -> Result<OlsFit, OlsError> {
 
     // Standardized / studentized values.
     let (mp, sp) = (mean(&predicted), sd(&predicted));
-    let z_predicted: Vec<f64> = predicted.iter().map(|p| (p - mp) / sp).collect();
+    // Predicted values constant up to rounding (zero slope): standardizing them is undefined.
+    let pscale = y.iter().chain(&predicted).fold(0.0f64, |m, v| m.max(v.abs()));
+    let z_predicted: Vec<f64> = if is_constant_computed(&predicted, pscale) {
+        vec![f64::NAN; n]
+    } else {
+        predicted.iter().map(|p| (p - mp) / sp).collect()
+    };
     let z_residuals: Vec<f64> = residuals.iter().map(|e| undefined_if_perfect(e / se_est)).collect();
     let studentized_residuals: Vec<f64> = (0..n)
         .map(|i| {
