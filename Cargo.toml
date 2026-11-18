@@ -7,6 +7,7 @@ members = [
     "crates/procedures",
     "crates/statik-cli",
     "crates/sav-io",
+    "crates/transform",
 ]
 
 [workspace.package]
@@ -19,3 +20,8 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# The expression parser/evaluator recurses; unoptimised frames are ~10x larger, so keep
+# debug builds of it optimised enough that the nesting limits fit a 1 MB main-thread stack.
+[profile.dev.package.transform]
+opt-level = 1
