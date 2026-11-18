@@ -41,6 +41,10 @@ pub enum TransformError {
     InvalidTarget(String),
     /// Wrong function arguments (count, `.n` suffix, TO range order).
     InvalidArguments(String),
+    /// Input variable is not numeric.
+    NotNumeric(String),
+    /// Output variable name already exists (or is repeated).
+    NameTaken(String),
 }
 
 impl fmt::Display for TransformError {
@@ -49,6 +53,8 @@ impl fmt::Display for TransformError {
             TransformError::Parse(e) => write!(f, "Syntax error in expression: {e}"),
             TransformError::ConditionParse(e) => write!(f, "Syntax error in condition: {e}"),
             TransformError::UnknownVariable(n) => write!(f, "Unknown variable {n}"),
+            TransformError::NotNumeric(n) => write!(f, "Variable {n} is not numeric"),
+            TransformError::NameTaken(n) => write!(f, "Variable name {n} is already in use"),
             TransformError::Type(m) | TransformError::InvalidTarget(m) | TransformError::InvalidArguments(m) => {
                 f.write_str(m)
             }
