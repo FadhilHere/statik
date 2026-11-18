@@ -174,8 +174,57 @@ def case_ttest():
     }
 
 
+def case_anova():
+    from scipy import stats
+
+    sk = pd.read_csv(DATA / "skripsi60.csv")
+    g = [sk.loc[sk["grp"] == k, "y"].to_numpy(dtype=float) for k in (1, 2)]
+    r = stats.f_oneway(*g)
+    allv = np.concatenate(g)
+    gm = allv.mean()
+    ssb = float(sum(len(a) * (a.mean() - gm) ** 2 for a in g))
+    ssw = float(sum(((a - a.mean()) ** 2).sum() for a in g))
+    lev = stats.levene(*g, center="mean")
+    return {
+        "case": "anova",
+        "values": {
+            "g1": [float(v) for v in g[0]], "g2": [float(v) for v in g[1]],
+            "f": float(r.statistic), "p": float(r.pvalue), "ssb": ssb, "ssw": ssw,
+            "levene_f": float(lev.statistic), "levene_p": float(lev.pvalue),
+        },
+    }
+
+
+def case_runs():
+    import statsmodels.api as sm
+    from scipy import stats
+
+    df = pd.read_csv(DATA / "skripsi60.csv")
+    X = sm.add_constant(df[["x1", "x2", "x3"]].to_numpy(dtype=float))
+    resid = np.asarray(sm.OLS(df["y"].to_numpy(dtype=float), X).fit().resid, dtype=float)
+    n = len(resid)
+    med = float(np.percentile(resid, 50, method="weibull"))  # HAVERAGE median
+    below = resid < med
+    n1 = int(below.sum())
+    n2 = n - n1
+    runs = 1 + int((below[1:] != below[:-1]).sum())
+    mu = 2.0 * n1 * n2 / n + 1.0
+    var = 2.0 * n1 * n2 * (2.0 * n1 * n2 - n) / (n * n * (n - 1.0))
+    d = runs - mu
+    if n < 50:
+        d = 0.0 if abs(d) < 0.5 else d - 0.5 * np.sign(d)
+    z = d / np.sqrt(var)
+    return {
+        "case": "runs",
+        "values": {
+            "resid": [float(v) for v in resid], "median": med, "n_below": n1, "n_above": n2,
+            "runs": runs, "z": float(z), "p": float(2 * stats.norm.sf(abs(z))),
+        },
+    }
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality, case_ttest]
+CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality, case_ttest, case_anova, case_runs]
 
 
 def main():
