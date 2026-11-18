@@ -65,8 +65,10 @@ fn regression_title_markers() {
     assert_eq!(tf("Collinearity Diagnostics"), ['a']);
     assert_eq!(tf("Residuals Statistics"), ['a']);
     // Markers that point at cells/rows stay there; every listed footnote has a marker somewhere.
-    assert_eq!(find(&table(&items, "ANOVA").row_headers, "Regression").footnotes, ['b']);
-    assert!(table(&items, "ANOVA").cells.iter().flatten().all(|c| c.footnotes.is_empty()));
+    let anova = table(&items, "ANOVA");
+    assert!(find(&anova.row_headers, "Regression").footnotes.is_empty());
+    assert_eq!(anova.cells[0][4].footnotes, ['b']);
+    assert_eq!(anova.cells.iter().flatten().filter(|c| !c.footnotes.is_empty()).count(), 1);
     assert_eq!(table(&items, "Model Summary").cells[0][0].footnotes, ['a']);
 }
 
@@ -113,14 +115,23 @@ fn explore_header_marker_and_qq_title() {
 }
 
 #[test]
-fn npar_ks_row_header_markers() {
-    let ds = load("sleep.csv");
-    let items = run_npar_ks(&ds, &NparKsOptions { vars: vec![ds.find("extra").unwrap()] });
+fn npar_ks_markers_per_variable() {
+    let ds = load("skripsi60.csv");
+    let vars: Vec<_> = ["x1", "x2", "x3", "y"].iter().map(|n| ds.find(n).unwrap()).collect();
+    let items = run_npar_ks(&ds, &NparKsOptions { vars });
     let t = table(&items, "One-Sample Kolmogorov-Smirnov Test");
     assert_eq!(find(&t.row_headers, "Normal Parameters").footnotes, ['a', 'b']);
-    assert_eq!(find(&t.row_headers, "Test Statistic").footnotes, ['c']);
-    assert_eq!(find(&t.row_headers, "Asymp. Sig. (2-tailed)").footnotes, ['d']);
-    assert!(t.cells.iter().flatten().all(|c| c.footnotes.is_empty()));
+    assert!(find(&t.row_headers, "Test Statistic").footnotes.is_empty());
+    assert!(find(&t.row_headers, "Asymp. Sig. (2-tailed)").footnotes.is_empty());
+    let sig = t.cells.last().unwrap();
+    let text: Vec<String> = sig.iter().map(format_cell).collect();
+    // Every Sig. carries c; d only where the value is the .200 lower bound.
+    for (c, s) in sig.iter().zip(&text) {
+        let bound = s.starts_with(".200");
+        assert_eq!(c.footnotes, if bound { vec!['c', 'd'] } else { vec!['c'] }, "{s}");
+    }
+    assert!(text.iter().any(|s| s.ends_with("c,d")) && text.iter().any(|s| s.ends_with('c')), "need a mixed case: {text:?}");
+    assert!(t.cells[..t.cells.len() - 1].iter().flatten().all(|c| c.footnotes.is_empty()));
 }
 
 #[test]

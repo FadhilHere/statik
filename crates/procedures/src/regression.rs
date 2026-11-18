@@ -1,5 +1,5 @@
 //! Linear Regression (SPSS REGRESSION, method Enter).
-use crate::cells::{check_numeric_ids, empty, foot, group, label, leaf, marked, num, num_or_empty, text, warning};
+use crate::cells::{check_numeric_ids, empty, foot, group, label, leaf, num, num_or_empty, text, warning};
 use dataset::{Column, Dataset, VarId, Variable};
 use output_model::{CellFormat, Chart, HeaderNode, OutputItem, Table};
 use stat_core::dist::normal_cdf;
@@ -200,7 +200,7 @@ fn anova_table(fit: &OlsFit, pred_note: &str, dep_note: &str) -> Table {
         row_headers: vec![HeaderNode {
             label: "1".into(),
             footnotes: vec![],
-            children: vec![marked(leaf("Regression"), &['b']), leaf("Residual"), leaf("Total")],
+            children: vec![leaf("Regression"), leaf("Residual"), leaf("Total")],
         }],
         cells: vec![
             vec![
@@ -208,7 +208,7 @@ fn anova_table(fit: &OlsFit, pred_note: &str, dep_note: &str) -> Table {
                 count(fit.df_reg),
                 num(ms_reg, F3),
                 num(fit.f, F3),
-                num(fit.f_sig, CellFormat::Sig),
+                foot(num(fit.f_sig, CellFormat::Sig), 'b'),
             ],
             vec![num(fit.ss_res, F3), count(fit.df_res), num(ms_res, F3), empty(), empty()],
             vec![num(fit.ss_reg + fit.ss_res, F3), count(fit.df_reg + fit.df_res), empty(), empty(), empty()],

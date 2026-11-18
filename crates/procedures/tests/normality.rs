@@ -166,8 +166,8 @@ fn npar_ks_table() {
     assert_eq!(rows[3], ".143");
     assert_eq!(rows[6], ".143");
     assert!(rows[7].starts_with(".200"), "{}", rows[7]);
-    assert!(t.cells[7][0].footnotes.is_empty());
-    assert_eq!(rows[7], ".200");
+    assert_eq!(t.cells[7][0].footnotes, vec!['c', 'd']);
+    assert_eq!(rows[7], ".200c,d");
     let notes: Vec<&str> = t.footnotes.iter().map(|(_, s)| s.as_str()).collect();
     assert_eq!(
         notes,
@@ -186,7 +186,7 @@ fn npar_ks_x1() {
     let opt = NparKsOptions { vars: vec![ds.find("x1").unwrap()] };
     let items = run_npar_ks(&ds, &opt);
     let t = table(&items, "One-Sample Kolmogorov-Smirnov Test");
-    assert_eq!(format_cell(&t.cells[7][0]), ".041");
+    assert_eq!(format_cell(&t.cells[7][0]), ".041c");
     assert_eq!(t.footnotes.len(), 3);
 }
 
@@ -215,7 +215,7 @@ fn npar_ks_on_saved_regression_residuals() {
     assert_eq!(rows[1], ".0000000");
     assert_eq!(rows[2].split('.').nth(1).unwrap().len(), 8, "{}", rows[2]);
     assert_eq!(rows[3], ".069");
-    assert_eq!(rows[7], ".200");
+    assert_eq!(rows[7], ".200c,d");
 }
 
 #[test]
