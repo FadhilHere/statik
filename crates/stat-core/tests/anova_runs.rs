@@ -66,3 +66,10 @@ fn runs_alternating_and_continuity() {
     let z = (8.0 - 5.0 - 0.5) / (2.0f64 * 16.0 * 24.0 / (64.0 * 7.0)).sqrt();
     close(o.z, z, 1e-12, "z");
 }
+
+#[test]
+fn levene_constant_inexact_groups_is_nan() {
+    let (f, sig, df1, df2) = stat_core::levene_mean(&[&[0.1, 0.1, 0.1][..], &[0.2, 0.2, 0.2]]);
+    assert!(f.is_nan() && sig.is_nan());
+    assert_eq!((df1, df2), (1, 4));
+}

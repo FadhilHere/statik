@@ -257,3 +257,27 @@ fn frequencies_labels_no_missing() {
     let s = table(&items, "Statistics");
     assert_eq!(n(&val(s, "Missing", "grp")), 0.0);
 }
+
+#[test]
+fn oneway_constant_inexact_groups() {
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("v"), Column::Numeric(vec![0.1, 0.1, 0.1, 0.2, 0.2, 0.2])).unwrap();
+    ds.add_variable(Variable::numeric("g"), Column::Numeric(vec![1.0, 1.0, 1.0, 2.0, 2.0, 2.0])).unwrap();
+    let o = OneWayOptions { dependent: ds.find("v").unwrap(), factor: ds.find("g").unwrap(), descriptives: false, homogeneity: true };
+    let items = run_oneway(&ds, &o);
+    let h = table(&items, "Tests of Homogeneity of Variances");
+    assert_eq!(val(h, "Based on Mean", "Levene Statistic").value, CellValue::Text(".".into()));
+    assert_eq!(val(h, "Based on Mean", "Sig.").value, CellValue::Text(".".into()));
+    assert_eq!(val(table(&items, "ANOVA"), "Between Groups", "Sig.").value, CellValue::Text(".".into()));
+    assert!(!warnings(&items).is_empty());
+}
+
+#[test]
+fn descriptives_z_name_unavailable_terminates() {
+    let mut ds = Dataset::new();
+    let long = "a".repeat(63);
+    ds.add_variable(Variable::numeric(&long), Column::Numeric(vec![1.0, 2.0, 3.0])).unwrap();
+    let id = ds.find(&long).unwrap();
+    let items = run_descriptives(&mut ds, &DescriptivesOptions { vars: vec![id], skew_kurt: false, save_z: true });
+    assert!(!warnings(&items).is_empty() || ds.n_vars() > 1);
+}

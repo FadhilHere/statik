@@ -50,6 +50,10 @@ pub fn levene_mean(groups: &[&[f64]]) -> (f64, f64, usize, usize) {
     let z: Vec<Vec<f64>> = groups
         .iter()
         .map(|g| {
+            // Constant group: rounding in the mean must not leave tiny non-zero deviations.
+            if g.iter().all(|&v| v == g[0]) {
+                return vec![0.0; g.len()];
+            }
             let m = g.iter().sum::<f64>() / g.len() as f64;
             g.iter().map(|v| (v - m).abs()).collect()
         })
@@ -63,6 +67,9 @@ pub fn levene_mean(groups: &[&[f64]]) -> (f64, f64, usize, usize) {
         ssw += g.iter().map(|v| (v - m) * (v - m)).sum::<f64>();
     }
     let (df1, df2) = (k - 1, n - k);
+    if ssw == 0.0 {
+        return (f64::NAN, f64::NAN, df1, df2);
+    }
     let f = (ssb / df1 as f64) / (ssw / df2 as f64);
     (f, f_sig(f, df1 as f64, df2 as f64), df1, df2)
 }

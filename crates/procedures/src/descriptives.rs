@@ -1,6 +1,6 @@
 //! Descriptives (SPSS DESCRIPTIVES, optionally /SAVE standardized values).
 use crate::cells::{empty, fixed_plus, group, label, leaf, num, num_or_empty, warning};
-use dataset::{Column, Dataset, VarId, VarType, Variable};
+use dataset::{Column, Dataset, DatasetError, VarId, VarType, Variable};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::describe;
 
@@ -102,15 +102,29 @@ pub fn run_descriptives(ds: &mut Dataset, o: &DescriptivesOptions) -> Vec<Output
         };
         let mut zname = format!("Z{src_name}");
         loop {
-            if ds.find(&zname).is_none() && ds.add_variable(make(&zname), Column::Numeric(z.clone())).is_ok() {
-                break;
+            if ds.find(&zname).is_none() {
+                match ds.add_variable(make(&zname), Column::Numeric(z.clone())) {
+                    Ok(_) => break,
+                    // A name that is invalid (e.g. too long) falls through to ZSC###; other errors cannot be fixed by renaming.
+                    Err(DatasetError::InvalidName(_)) | Err(DatasetError::DuplicateName(_)) => {}
+                    Err(_) => {
+                        zsc = 1000;
+                    }
+                }
             }
             loop {
                 zsc += 1;
+                if zsc > 999 {
+                    break;
+                }
                 zname = format!("ZSC{zsc:03}");
                 if ds.find(&zname).is_none() {
                     break;
                 }
+            }
+            if zsc > 999 {
+                out.extend(warning(format!("Descriptives: no name could be created for the Z scores of {src_name}.")));
+                break;
             }
         }
     }
