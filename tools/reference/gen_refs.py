@@ -109,8 +109,40 @@ def case_ols_skripsi60():
     }
 
 
+def case_normality():
+    import statsmodels.api as sm
+    from scipy import stats
+    from statsmodels.stats.diagnostic import lilliefors
+
+    df = pd.read_csv(DATA / "skripsi60.csv")
+    X = sm.add_constant(df[["x1", "x2", "x3"]].to_numpy(dtype=float))
+    resid = sm.OLS(df["y"].to_numpy(dtype=float), X).fit().resid
+    samples = {
+        "x1": df["x1"].to_numpy(dtype=float),
+        "resid": np.asarray(resid, dtype=float),
+        "sleep_extra": pd.read_csv(DATA / "sleep.csv")["extra"].to_numpy(dtype=float),
+    }
+    # Small samples exercise the n = 3 (exact), 4..11 and n <= 5 coefficient branches of AS R94.
+    for k in (3, 4, 5, 10):
+        samples[f"sleep_{k}"] = samples["sleep_extra"][:k]
+    # Skewed samples with small Lilliefors p; n = 150 exercises the n > 100 scaling.
+    samples["skew30"] = np.round(np.exp(np.arange(1, 31) / 6.0), 4)
+    samples["skew150"] = np.round(10 * (np.arange(1, 151) / 151.0) ** 3, 4)
+    values = {}
+    for name, x in samples.items():
+        sw = stats.shapiro(x)
+        values[name] = [float(v) for v in x]
+        values[f"{name}_sw_w"] = float(sw.statistic)
+        values[f"{name}_sw_p"] = float(sw.pvalue)
+        if len(x) >= 5:
+            d, p = lilliefors(x, dist="norm", pvalmethod="approx")
+            values[f"{name}_lf_d"] = float(d)
+            values[f"{name}_lf_p"] = float(p)
+    return {"case": "normality", "values": values}
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = [case_describe_skripsi60, case_ols_skripsi60]
+CASES = [case_describe_skripsi60, case_ols_skripsi60, case_normality]
 
 
 def main():

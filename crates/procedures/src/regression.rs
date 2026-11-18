@@ -1,6 +1,7 @@
 //! Linear Regression (SPSS REGRESSION, method Enter).
 use dataset::{Column, Dataset, VarId, VarType, Variable};
-use output_model::{Cell, CellFormat, CellValue, Chart, HeaderNode, OutputItem, Table};
+use crate::cells::{empty, foot, group, label, leaf, num, num_or_empty, text, warning};
+use output_model::{CellFormat, Chart, HeaderNode, OutputItem, Table};
 use stat_core::dist::normal_cdf;
 use stat_core::ols::{OlsError, OlsFit, candidate_stats, ols};
 
@@ -26,52 +27,12 @@ pub struct RegressionOptions {
     pub save: SaveFlags,
 }
 
-fn label(ds: &Dataset, id: VarId) -> String {
-    let v = ds.var(id);
-    v.label.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| v.name.clone())
-}
-
-fn leaf(s: &str) -> HeaderNode {
-    HeaderNode { label: s.to_string(), children: vec![] }
-}
-
-fn group(s: &str, children: &[&str]) -> HeaderNode {
-    HeaderNode { label: s.to_string(), children: children.iter().map(|c| leaf(c)).collect() }
-}
-
 fn model_rows(children: Vec<String>) -> Vec<HeaderNode> {
     vec![HeaderNode { label: "1".into(), children: children.into_iter().map(|c| leaf(&c)).collect() }]
 }
 
-/// Numeric cell; a non-finite (undefined) statistic is shown as "." like SPSS system-missing.
-fn num(v: f64, format: CellFormat) -> Cell {
-    if v.is_finite() { Cell { value: CellValue::Num(v), format, footnotes: vec![] } } else { text(".") }
-}
-
-/// Numeric cell, or an empty cell when the value is NaN (statistic not applicable).
-fn num_or_empty(v: f64, format: CellFormat) -> Cell {
-    if v.is_nan() { empty() } else { num(v, format) }
-}
-
-fn text(s: &str) -> Cell {
-    Cell { value: CellValue::Text(s.to_string()), format: CellFormat::Text, footnotes: vec![] }
-}
-
-fn empty() -> Cell {
-    Cell { value: CellValue::Empty, format: CellFormat::Text, footnotes: vec![] }
-}
-
-fn foot(mut c: Cell, mark: char) -> Cell {
-    c.footnotes.push(mark);
-    c
-}
-
 const F3: CellFormat = CellFormat::Fixed(3);
 const F4: CellFormat = CellFormat::Fixed(4);
-
-fn warning(msg: impl Into<String>) -> Vec<OutputItem> {
-    vec![OutputItem::Warning(msg.into())]
-}
 
 fn mean_sd(v: &[f64]) -> (f64, f64) {
     let n = v.len() as f64;
