@@ -81,3 +81,10 @@ fn distributions() {
     close(t_quantile(0.975, 2.0), 4.302652729911275, 1e-9, "t q2");
     close(t_quantile(0.975, 10.0), 2.2281388519649385, 1e-9, "t q10");
 }
+
+#[test]
+fn constant_data_has_exactly_zero_spread() {
+    let d = describe(&[0.1, 0.1, 0.1]).unwrap();
+    assert_eq!((d.variance, d.sd, d.se_mean), (0.0, 0.0, 0.0));
+    assert!(d.skewness.is_none() && d.kurtosis.is_none());
+}

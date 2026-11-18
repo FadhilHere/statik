@@ -38,7 +38,7 @@ fn make(mean_diff: f64, se: f64, df: f64, conf: f64) -> TResult {
 /// One-sample t test against `test_value`. `None` when n < 2 or the sd is 0.
 pub fn one_sample_t(x: &[f64], test_value: f64, conf: f64) -> Option<TResult> {
     let d = describe(x)?;
-    if d.n < 2 || d.sd.is_nan() || d.sd <= 0.0 || !d.sd.is_finite() {
+    if d.n < 2 || d.min == d.max || d.sd.is_nan() || !d.sd.is_finite() {
         return None;
     }
     Some(make(d.mean - test_value, d.se_mean, (d.n - 1) as f64, conf))
@@ -74,9 +74,12 @@ pub fn independent_t(a: &[f64], b: &[f64], conf: f64) -> Option<IndResult> {
         return None;
     }
     let (da, db) = (describe(a)?, describe(b)?);
+    if da.min == da.max && db.min == db.max {
+        return None;
+    }
     let (na, nb) = (da.n as f64, db.n as f64);
     let sp2 = ((na - 1.0) * da.variance + (nb - 1.0) * db.variance) / (na + nb - 2.0);
-    if sp2.is_nan() || sp2 <= 0.0 || !sp2.is_finite() {
+    if sp2.is_nan() || !sp2.is_finite() {
         return None;
     }
     let md = da.mean - db.mean;
@@ -96,6 +99,18 @@ pub fn paired_t(a: &[f64], b: &[f64], conf: f64) -> Option<PairedResult> {
     }
     let diff: Vec<f64> = a.iter().zip(b).map(|(x, y)| x - y).collect();
     let test = one_sample_t(&diff, 0.0, conf)?;
+    let (corr, corr_sig) = paired_corr(a, b);
+    let sd_diff = test.se_diff * (a.len() as f64).sqrt();
+    Some(PairedResult { corr, corr_sig, test, sd_diff })
+}
+
+/// Pearson correlation of two paired samples and its two-sided significance; NaN when either
+/// variable is constant (or n < 2; the significance also needs n >= 3).
+pub fn paired_corr(a: &[f64], b: &[f64]) -> (f64, f64) {
+    let const_of = |x: &[f64]| x.iter().all(|&v| v == x[0]);
+    if a.len() != b.len() || a.len() < 2 || const_of(a) || const_of(b) {
+        return (f64::NAN, f64::NAN);
+    }
     let n = a.len() as f64;
     let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n);
     let (mut sab, mut saa, mut sbb) = (0.0, 0.0, 0.0);
@@ -104,14 +119,13 @@ pub fn paired_t(a: &[f64], b: &[f64], conf: f64) -> Option<PairedResult> {
         saa += (x - ma) * (x - ma);
         sbb += (y - mb) * (y - mb);
     }
-    let corr = if saa > 0.0 && sbb > 0.0 { (sab / (saa * sbb).sqrt()).clamp(-1.0, 1.0) } else { f64::NAN };
-    let corr_sig = if corr.is_nan() || a.len() < 3 {
+    let corr = (sab / (saa * sbb).sqrt()).clamp(-1.0, 1.0);
+    let corr_sig = if a.len() < 3 {
         f64::NAN
     } else if corr.abs() >= 1.0 {
         0.0
     } else {
         t_sig_two_tailed(corr * ((n - 2.0) / (1.0 - corr * corr)).sqrt(), n - 2.0)
     };
-    let sd_diff = test.se_diff * n.sqrt();
-    Some(PairedResult { corr, corr_sig, test, sd_diff })
+    (corr, corr_sig)
 }

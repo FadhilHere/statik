@@ -2,13 +2,17 @@
 use crate::cells::{SD_ZERO_MSG, df_cell, fixed_plus, group, label, leaf, num, parent, sig_header, warning};
 use crate::ttest_one::pct;
 use dataset::{Dataset, VarId, VarType};
-use output_model::{CellFormat, OutputItem, Table};
-use stat_core::{describe, paired_t};
+use output_model::{Cell, CellFormat, OutputItem, Table};
+use stat_core::{describe, paired_corr, paired_t};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairedOptions {
     pub pairs: Vec<(VarId, VarId)>,
     pub conf: f64,
+}
+
+fn corr_row(n: usize, c: f64, sig: f64) -> Vec<Cell> {
+    vec![num(n as f64, CellFormat::Count), num(c, CellFormat::Fixed(3)), num(sig / 2.0, CellFormat::Sig), num(sig, CellFormat::Sig)]
 }
 
 /// Run the test; each pair uses its own complete cases (per-pair listwise).
@@ -49,16 +53,15 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
                 SD_ZERO_MSG
             };
             warns.extend(warning(why));
+            // SPSS still prints the correlation when only the differences are constant.
+            let (c, cs) = paired_corr(&xa, &xb);
+            corr_h.push(leaf(&format!("Pair {k}  {la} & {lb}")));
+            corr_rows.push(corr_row(rows.len(), c, cs));
             continue;
         };
         let dec = va.decimals.max(vb.decimals);
         corr_h.push(leaf(&format!("Pair {k}  {la} & {lb}")));
-        corr_rows.push(vec![
-            num(rows.len() as f64, CellFormat::Count),
-            num(r.corr, CellFormat::Fixed(3)),
-            num(r.corr_sig / 2.0, CellFormat::Sig),
-            num(r.corr_sig, CellFormat::Sig),
-        ]);
+        corr_rows.push(corr_row(rows.len(), r.corr, r.corr_sig));
         test_h.push(leaf(&format!("Pair {k}  {la} - {lb}")));
         test_rows.push(vec![
             num(r.test.mean_diff, fixed_plus(dec, 2)),
@@ -84,7 +87,7 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
         footnotes: vec![],
     }));
     out.extend(warns);
-    if !test_rows.is_empty() {
+    if !corr_rows.is_empty() {
         out.push(OutputItem::Table(Table {
             title: "Paired Samples Correlations".into(),
             col_headers: vec![leaf("N"), leaf("Correlation"), sig_header()],
@@ -92,6 +95,8 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
             cells: corr_rows,
             footnotes: vec![],
         }));
+    }
+    if !test_rows.is_empty() {
         let ci = format!("{}% Confidence Interval of the Difference", pct(o.conf));
         out.push(OutputItem::Table(Table {
             title: "Paired Samples Test".into(),

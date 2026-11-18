@@ -131,3 +131,58 @@ fn paired_constant_difference_warns() {
     let items = run_paired(&ds, &o);
     assert!(!warnings(&items).is_empty());
 }
+
+fn const_ds() -> Dataset {
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("c1"), Column::Numeric(vec![0.1; 3])).unwrap();
+    ds.add_variable(Variable::numeric("c3"), Column::Numeric(vec![0.3; 3])).unwrap();
+    ds.add_variable(Variable::numeric("g"), Column::Numeric(vec![1.0, 1.0, 2.0])).unwrap();
+    ds
+}
+
+#[test]
+fn inexact_constants_warn() {
+    let ds = const_ds();
+    let (c1, c3) = (ds.find("c1").unwrap(), ds.find("c3").unwrap());
+    let items = run_one_sample(&ds, &OneSampleOptions { vars: vec![c1], test_value: 0.0, conf: 0.95 });
+    assert!(warnings(&items).contains(&"t cannot be computed because the standard deviation is 0."));
+    assert_eq!(tables(&items).len(), 1);
+    let ds2 = {
+        let mut d = Dataset::new();
+        d.add_variable(Variable::numeric("y"), Column::Numeric(vec![0.1; 4])).unwrap();
+        d.add_variable(Variable::numeric("g"), Column::Numeric(vec![1.0, 1.0, 2.0, 2.0])).unwrap();
+        d
+    };
+    let items = run_independent(
+        &ds2,
+        &IndependentOptions {
+            test_vars: vec![ds2.find("y").unwrap()],
+            grouping: ds2.find("g").unwrap(),
+            group1: 1.0,
+            group2: 2.0,
+            conf: 0.95,
+        },
+    );
+    assert!(!warnings(&items).is_empty());
+    assert!(tables(&items).iter().all(|t| t.title != "Independent Samples Test"));
+    // Paired: constant columns -> statistics and correlation tables stay, the test becomes a warning.
+    let items = run_paired(&ds, &PairedOptions { pairs: vec![(c3, c1)], conf: 0.95 });
+    let titles: Vec<&str> = tables(&items).iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(titles, ["Paired Samples Statistics", "Paired Samples Correlations"]);
+    assert!(!warnings(&items).is_empty());
+    let corr = tables(&items)[1];
+    assert!(matches!(&corr.cells[0][1].value, CellValue::Text(s) if s == "."));
+}
+
+#[test]
+fn paired_constant_difference_keeps_correlation() {
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("a"), Column::Numeric(vec![1.0, 2.0, 4.0, 7.0])).unwrap();
+    ds.add_variable(Variable::numeric("b"), Column::Numeric(vec![0.0, 1.0, 3.0, 6.0])).unwrap();
+    let (a, b) = (ds.find("a").unwrap(), ds.find("b").unwrap());
+    let items = run_paired(&ds, &PairedOptions { pairs: vec![(a, b)], conf: 0.95 });
+    let titles: Vec<&str> = tables(&items).iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(titles, ["Paired Samples Statistics", "Paired Samples Correlations"]);
+    assert!((num(&tables(&items)[1].cells[0][1]) - 1.0).abs() < 1e-9);
+    assert!(!warnings(&items).is_empty());
+}

@@ -86,3 +86,16 @@ fn degenerate_cases_are_none() {
     assert!(one_sample_t(&[3.0], 1.0, 0.95).is_none());
     assert!(paired_t(&[1.0, 2.0, 3.0], &[2.0, 3.0, 4.0], 0.95).is_none()); // constant difference
 }
+
+#[test]
+fn inexact_constants_are_degenerate() {
+    assert!(one_sample_t(&[0.1, 0.1, 0.1], 0.0, 0.95).is_none());
+    assert!(independent_t(&[0.1, 0.1, 0.1], &[0.1, 0.1, 0.1], 0.95).is_none());
+    assert!(independent_t(&[0.1, 0.1, 0.1], &[0.1, 0.2, 0.4], 0.95).is_some());
+    // constant difference 0.2 (inexact) -> no test; correlation undefined for a constant variable
+    assert!(paired_t(&[0.3, 0.3, 0.3], &[0.1, 0.1, 0.1], 0.95).is_none());
+    let (c, s) = stat_core::paired_corr(&[0.3, 0.3, 0.3], &[0.1, 0.1, 0.1]);
+    assert!(c.is_nan() && s.is_nan());
+    let (c, _) = stat_core::paired_corr(&[1.0, 2.0, 3.0], &[2.0, 3.0, 5.0]);
+    assert!(c > 0.9);
+}

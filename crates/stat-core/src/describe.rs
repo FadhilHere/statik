@@ -37,20 +37,28 @@ pub fn describe(x: &[f64]) -> Option<Describe> {
         min = min.min(v);
         max = max.max(v);
     }
-    let variance = if n > 1 { m2 / (nf - 1.0) } else { f64::NAN };
+    // Constant data: rounding in the mean would otherwise leave a tiny non-zero spread.
+    let constant = min == max;
+    let variance = if n < 2 {
+        f64::NAN
+    } else if constant {
+        0.0
+    } else {
+        m2 / (nf - 1.0)
+    };
     let sd = variance.sqrt();
     let se_mean = sd / nf.sqrt();
 
     let (mut skewness, mut se_skewness) = (None, None);
     let (mut kurtosis, mut se_kurtosis) = (None, None);
-    if n >= 3 && sd > 0.0 {
+    if n >= 3 && sd > 0.0 && !constant {
         // sum of z^3 with z = d / sd
         skewness = Some(nf / ((nf - 1.0) * (nf - 2.0)) * m3 / (sd * sd * sd));
     }
     if n >= 3 {
         se_skewness = Some((6.0 * nf * (nf - 1.0) / ((nf - 2.0) * (nf + 1.0) * (nf + 3.0))).sqrt());
     }
-    if n >= 4 && sd > 0.0 {
+    if n >= 4 && sd > 0.0 && !constant {
         let s4 = m4 / (sd * sd * sd * sd);
         kurtosis = Some(
             nf * (nf + 1.0) / ((nf - 1.0) * (nf - 2.0) * (nf - 3.0)) * s4
