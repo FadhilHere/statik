@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/dataset",
+    "crates/stat-core",
+    "crates/output-model",
+    "crates/procedures",
+    "crates/statik-cli",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

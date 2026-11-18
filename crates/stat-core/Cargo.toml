@@ -1,0 +1,6 @@
+[package]
+name = "stat-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
