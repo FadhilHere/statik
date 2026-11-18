@@ -356,6 +356,11 @@ dependencies = [
 [[package]]
 name = "statik-cli"
 version = "0.1.0"
+dependencies = [
+ "dataset",
+ "output-model",
+ "procedures",
+]
 
 [[package]]
 name = "statrs"
