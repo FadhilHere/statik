@@ -1,7 +1,7 @@
 //! XLSX/XLS/ODS import through `calamine`.
 use crate::SavError;
 use crate::csv_import::{Cell, build_dataset};
-use calamine::{Data, Reader, open_workbook_auto};
+use calamine::{Data, Reader, Sheets, open_workbook_auto};
 use dataset::Dataset;
 use std::path::Path;
 
@@ -44,22 +44,31 @@ fn header_text(d: &Data) -> String {
     }
 }
 
+fn open(path: &Path) -> Result<Sheets<std::io::BufReader<std::fs::File>>, SavError> {
+    std::fs::File::open(path)?; // a missing file is an Io error, not a format error
+    open_workbook_auto(path).map_err(|e| SavError::Xlsx(format!("cannot open {}: {e}", path.display())))
+}
+
+/// The worksheet names of a workbook, in workbook order (for a sheet picker).
+pub fn xlsx_sheet_names(path: &Path) -> Result<Vec<String>, SavError> {
+    Ok(open(path)?.sheet_names())
+}
+
 /// Import one worksheet (the first one by default). A column holding both numbers and text becomes a
 /// string variable; empty cells are system-missing (numeric) or empty (string).
 pub fn import_xlsx(path: &Path, sheet: Option<&str>, header: bool) -> Result<Dataset, SavError> {
-    std::fs::File::open(path)?; // a missing file is an Io error, not a format error
-    let mut wb = open_workbook_auto(path).map_err(|e| SavError::Xlsx(format!("tidak bisa membuka {}: {e}", path.display())))?;
+    let mut wb = open(path)?;
     let name = match sheet {
         Some(s) => s.to_string(),
-        None => wb.sheet_names().first().cloned().ok_or_else(|| SavError::Xlsx("workbook tanpa sheet".into()))?,
+        None => wb.sheet_names().first().cloned().ok_or_else(|| SavError::Xlsx("the workbook has no sheets".into()))?,
     };
     if !wb.sheet_names().contains(&name) {
-        return Err(SavError::Xlsx(format!("sheet '{name}' tidak ditemukan")));
+        return Err(SavError::Xlsx(format!("sheet '{name}' not found")));
     }
     let range = wb.worksheet_range(&name).map_err(|e| SavError::Xlsx(format!("sheet '{name}': {e}")))?;
     let width = range.width();
     if width == 0 {
-        return Err(SavError::Xlsx(format!("sheet '{name}' kosong")));
+        return Err(SavError::Xlsx(format!("sheet '{name}' is empty")));
     }
     let mut rows = range.rows();
     let headers: Vec<String> = if header {

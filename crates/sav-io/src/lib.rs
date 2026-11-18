@@ -12,11 +12,11 @@ mod records;
 mod write;
 mod xlsx_import;
 
-pub use csv_import::{CsvOptions, import_csv};
+pub use csv_import::{CsvOptions, CsvPreview, import_csv, sniff_csv};
 pub use names::sanitize_name;
 pub use read::read_sav;
 pub use write::write_sav;
-pub use xlsx_import::import_xlsx;
+pub use xlsx_import::{import_xlsx, xlsx_sheet_names};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SavError {
@@ -26,21 +26,33 @@ pub enum SavError {
     Format(String),
     #[error("unsupported .sav feature: {0}")]
     Unsupported(String),
-    #[error("CSV tidak valid: {0}")]
+    #[error("Invalid CSV: {0}")]
     Csv(String),
-    #[error("XLSX tidak valid: {0}")]
+    #[error("Invalid XLSX: {0}")]
     Xlsx(String),
-    #[error("tipe file tidak didukung: {0}")]
+    #[error("Unsupported file type: {0}")]
     UnknownType(String),
+    /// The dataset is internally inconsistent (a bug, not a problem with any file).
+    #[error("Cannot save: {0}")]
+    Internal(String),
+}
+
+/// What a reader could not represent exactly: user-facing English sentences, one per issue
+/// (e.g. an ignored weight variable or a date format shown as numbers). Empty when nothing
+/// needs saying.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReadReport {
+    pub notes: Vec<String>,
 }
 
 /// Open a data file, choosing the reader by extension: `.sav`, `.csv`/`.txt`, `.xlsx`/`.xlsm`/`.xls`/`.ods`.
-pub fn open_any(path: &std::path::Path) -> Result<dataset::Dataset, SavError> {
+/// CSV and spreadsheet imports return an empty report.
+pub fn open_any(path: &std::path::Path) -> Result<(dataset::Dataset, ReadReport), SavError> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "sav" => read_sav(path),
-        "csv" | "txt" => import_csv(path, &CsvOptions::default()),
-        "xlsx" | "xlsm" | "xls" | "ods" => import_xlsx(path, None, true),
+        "csv" | "txt" => Ok((import_csv(path, &CsvOptions::default())?, ReadReport::default())),
+        "xlsx" | "xlsm" | "xls" | "ods" => Ok((import_xlsx(path, None, true)?, ReadReport::default())),
         other => Err(SavError::UnknownType(format!(".{other}"))),
     }
 }

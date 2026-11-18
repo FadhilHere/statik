@@ -103,8 +103,11 @@ fn run(args: &[String]) -> Res<()> {
         return usage(format!("unknown subcommand: {cmd}"));
     }
     let a = parse_args(&args[1..])?;
-    let mut ds = sav_io::open_any(std::path::Path::new(&a.file))
+    let (mut ds, report) = sav_io::open_any(std::path::Path::new(&a.file))
         .map_err(|e| CliError::Io(format!("cannot read {}: {e}", a.file)))?;
+    for note in &report.notes {
+        eprintln!("Note: {note}");
+    }
     let items: Vec<OutputItem> = match cmd.as_str() {
         "regression" => {
             let dependent = var(&ds, a.req("dep")?)?;

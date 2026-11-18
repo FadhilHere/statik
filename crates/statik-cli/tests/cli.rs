@@ -84,3 +84,13 @@ fn regression_on_sav_file() {
         assert!(s.contains(k), "missing {k}");
     }
 }
+
+/// Read notes (e.g. an ignored weight variable) are printed on stderr; the output stays on stdout.
+#[test]
+fn sav_read_notes_go_to_stderr() {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sav/metadata.sav");
+    let o = run(&["regression", p.to_str().unwrap(), "--dep", "harga", "--indep", "id"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("Note: Weight variable bobot is ignored by Statik analyses (results are unweighted)."), "{err}");
+    assert!(!stdout(&o).contains("Weight variable"));
+}

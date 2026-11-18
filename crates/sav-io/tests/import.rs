@@ -1,5 +1,5 @@
-use dataset::{Column, Dataset, VarType};
-use sav_io::{CsvOptions, SavError, import_csv, import_xlsx, open_any, sanitize_name};
+use dataset::{Column, Dataset, VarId, VarType};
+use sav_io::{CsvOptions, SavError, import_csv, import_xlsx, open_any, sanitize_name, sniff_csv, xlsx_sheet_names};
 use std::path::PathBuf;
 
 fn fixture(rel: &str) -> PathBuf {
@@ -61,7 +61,7 @@ fn messy_headers_get_valid_unique_names() {
 fn ragged_row_reports_line_number() {
     let p = temp_csv("ragged.csv", b"a,b,c\n1,2,3\n4,5\n6,7,8\n");
     match import_csv(&p, &auto()) {
-        Err(SavError::Csv(m)) => assert!(m.starts_with("baris 3:"), "{m}"),
+        Err(SavError::Csv(m)) => assert_eq!(m, "line 3 has 2 fields, expected 3"),
         other => panic!("expected Format error, got {other:?}"),
     }
 }
@@ -192,14 +192,17 @@ fn xlsx_unknown_sheet_is_an_error() {
 
 #[test]
 fn open_any_dispatches_on_extension() {
-    let sav = open_any(&fixture("sav/basic.sav")).unwrap();
+    let (sav, _) = open_any(&fixture("sav/basic.sav")).unwrap();
     assert!(sav.find("gender").is_some());
-    let csv = open_any(&fixture("data/indo_semicolon.csv")).unwrap();
+    let (csv, report) = open_any(&fixture("data/indo_semicolon.csv")).unwrap();
+    assert!(report.notes.is_empty());
     assert!(csv.find("Nilai_Ujian").is_some());
-    let xlsx = open_any(&fixture("data/sample.xlsx")).unwrap();
+    let (xlsx, _) = open_any(&fixture("data/sample.xlsx")).unwrap();
     assert!(xlsx.find("Nilai").is_some());
     let p = temp_csv("x.docx", b"zzz");
-    assert!(matches!(open_any(&p), Err(SavError::UnknownType(_))));
+    let e = open_any(&p).unwrap_err();
+    assert!(matches!(e, SavError::UnknownType(_)));
+    assert_eq!(e.to_string(), "Unsupported file type: .docx");
 }
 
 #[test]
@@ -215,9 +218,9 @@ fn single_column_with_decimal_commas() {
 fn errors_name_their_source() {
     let p = temp_csv("ragged2.csv", b"a,b\n1,2\n3\n");
     let e = import_csv(&p, &auto()).unwrap_err().to_string();
-    assert!(e.starts_with("CSV tidak valid: baris 3"), "{e}");
+    assert_eq!(e, "Invalid CSV: line 3 has 1 field, expected 2");
     let e = import_xlsx(&fixture("data/sample.xlsx"), Some("Nope"), true).unwrap_err().to_string();
-    assert!(e.starts_with("XLSX tidak valid:"), "{e}");
+    assert_eq!(e, "Invalid XLSX: sheet 'Nope' not found");
 }
 
 #[test]
@@ -233,4 +236,125 @@ fn integers_beyond_15_digits_stay_text_but_leading_zeros_stay_numeric() {
     let p = temp_csv("d15.csv", b"x\n123456789012345\n");
     let ds = import_csv(&p, &auto()).unwrap();
     assert_eq!(num(&ds, "x"), [123456789012345.0]);
+}
+
+/// Indonesian Rupiah amounts use `.` for thousands. In a `;` file with no cell that only makes
+/// sense with a decimal point, `750.000` is 750000 (it used to import as 750).
+#[test]
+fn semicolon_file_reads_dot_thousands_as_thousands() {
+    let p = temp_csv("rupiah.csv", b"nama;gaji;umur\nAni;750.000;21\nBudi;500.000;22\nCici;1.250;23\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "gaji"), [750000.0, 500000.0, 1250.0]);
+    assert_eq!(ds.var(ds.find("gaji").unwrap()).decimals, 0);
+    assert_eq!(num(&ds, "umur"), [21.0, 22.0, 23.0]);
+    // Tab-separated works the same way.
+    let p = temp_csv("rupiah.tsv", b"gaji\tumur\n1.500.000\t21\n2.000\t22\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "gaji"), [1500000.0, 2000.0]);
+}
+
+/// Thousands dots and decimal commas together (the usual Indonesian Excel export).
+#[test]
+fn semicolon_file_mixing_thousands_dots_and_decimal_commas() {
+    let p = temp_csv("mixed.csv", b"gaji;nilai\n750.000;78,5\n1.250;80\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "gaji"), [750000.0, 1250.0]);
+    assert_eq!(num(&ds, "nilai"), [78.5, 80.0]);
+}
+
+/// A cell that is only valid with a decimal point (`78.5`) switches the file to decimal points,
+/// so `1.250` in that file is 1.25.
+#[test]
+fn semicolon_file_with_dot_decimal_evidence_uses_decimal_points() {
+    let p = temp_csv("dotsemi.csv", b"a;b\n78.5;1.250\n2;3\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "a"), [78.5, 2.0]);
+    assert_eq!(num(&ds, "b"), [1.25, 3.0]);
+    assert_eq!(ds.var(ds.find("b").unwrap()).decimals, 3);
+}
+
+/// With a `,` delimiter a `.` is always the decimal point.
+#[test]
+fn comma_file_keeps_dot_decimals() {
+    let p = temp_csv("commadot.csv", b"x,y\n750.000,1\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "x"), [750.0]);
+}
+
+#[test]
+fn sniff_csv_reports_detection_and_first_rows() {
+    let pv = sniff_csv(&fixture("data/indo_semicolon.csv"), &auto(), 2).unwrap();
+    assert_eq!(pv.delimiter, b';');
+    assert!(pv.decimal_comma);
+    assert_eq!(pv.header, ["Jenis_Kelamin", "Nilai_Ujian", "Umur"]);
+    assert_eq!(pv.raw_header, ["Jenis Kelamin", "Nilai Ujian", "Umur"]);
+    assert_eq!(pv.rows, [vec!["1", "78,5", "20"], vec!["2", "82,25", "21"]]);
+
+    let p = temp_csv("sniff_rupiah.csv", b"gaji;umur\n750.000;21\n");
+    let pv = sniff_csv(&p, &auto(), 10).unwrap();
+    assert!(pv.decimal_comma);
+    assert_eq!(pv.rows.len(), 1);
+
+    let p = temp_csv("sniff_comma.csv", b"a,b\n1.5,2\n");
+    let pv = sniff_csv(&p, &CsvOptions { header: false, ..auto() }, 10).unwrap();
+    assert_eq!(pv.delimiter, b',');
+    assert!(!pv.decimal_comma);
+    assert_eq!(pv.header, ["VAR00001", "VAR00002"]);
+    assert_eq!(pv.raw_header, ["", ""]);
+    assert_eq!(pv.rows, [vec!["a", "b"], vec!["1.5", "2"]]);
+
+    // Explicit options are reported back as given.
+    let pv = sniff_csv(&p, &CsvOptions { delimiter: Some(b';'), decimal_comma: Some(true), header: true }, 10).unwrap();
+    assert_eq!(pv.delimiter, b';');
+    assert!(pv.decimal_comma);
+    assert_eq!(pv.raw_header, ["a,b"]);
+}
+
+#[test]
+fn xlsx_sheet_names_lists_sheets_in_order() {
+    assert_eq!(xlsx_sheet_names(&fixture("data/sample.xlsx")).unwrap(), ["Data", "Kosong"]);
+    assert!(matches!(xlsx_sheet_names(&fixture("data/nope.xlsx")), Err(SavError::Io(_))));
+    let p = temp_csv("notxlsx.xlsx", b"zzz");
+    assert!(matches!(xlsx_sheet_names(&p), Err(SavError::Xlsx(_))));
+}
+
+#[test]
+fn import_errors_are_english() {
+    let p = temp_csv("empty.csv", b"");
+    assert_eq!(import_csv(&p, &auto()).unwrap_err().to_string(), "Invalid CSV: the file is empty");
+    let p = temp_csv("unclosed.csv", b"a,b\n1,\"x\n");
+    let comma = CsvOptions { delimiter: Some(b','), ..auto() };
+    assert_eq!(import_csv(&p, &comma).unwrap_err().to_string(), "Invalid CSV: line 2: a quoted field is not closed");
+    let p = temp_csv("notxlsx2.xlsx", b"zzz");
+    let e = import_xlsx(&p, None, true).unwrap_err().to_string();
+    assert!(e.starts_with("Invalid XLSX: cannot open "), "{e}");
+}
+
+/// Reserved words (AND, TO, BY, ...) are not variable names: imports add `_1`.
+#[test]
+fn reserved_word_headers_get_a_suffix() {
+    let p = temp_csv("reserved.csv", b"and,TO,by,x\n1,2,3,4\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(names(&ds), ["and_1", "TO_1", "by_1", "x"]);
+    assert_eq!(ds.var(VarId(0)).label.as_deref(), Some("and"));
+    let none = |_: &str| false;
+    assert_eq!(sanitize_name("With", &none), "With_1");
+    let taken = |s: &str| s == "ALL_1";
+    assert_eq!(sanitize_name("ALL", &taken), "ALL_2");
+}
+
+/// The 64-name limit is in UTF-8 bytes; names are cut on a character boundary.
+#[test]
+fn sanitize_name_limits_bytes_not_characters() {
+    let none = |_: &str| false;
+    let got = sanitize_name(&"é".repeat(40), &none);
+    assert_eq!(got, "é".repeat(32));
+    let got = sanitize_name(&format!("a{}", "é".repeat(40)), &none);
+    assert_eq!(got, format!("a{}", "é".repeat(31))); // 63 bytes: the next 'é' would not fit
+    let full = "é".repeat(32);
+    let t = |s: &str| s == full;
+    let got = sanitize_name(&full, &t);
+    assert_eq!(got, format!("{}_1", "é".repeat(31)));
+    assert!(got.len() <= 64);
+    dataset::validate_name(&got).unwrap();
 }

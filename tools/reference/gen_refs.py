@@ -471,6 +471,48 @@ def write_sav_fixtures():
     files["bigendian.sav"] = _json_spec(_sav_cp1252_spec())
     out = {"case": "sav_basic", "files": files}
     (REF / "sav_basic.json").write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_sav_metadata_fixture()
+
+
+def write_sav_metadata_fixture():
+    """metadata.sav: dictionary features beyond sav_basic (final review of plan 2).
+
+    Weight variable (bobot), a DATE11 and a DOLLAR10.2 variable, string value labels and string
+    missing values on a short (A1) and a long (A15, subtypes 21/22) string, a file label and two
+    document lines. Expected values are asserted in crates/sav-io/tests/sav.rs
+    (metadata_fixture_*). pyreadstat cannot set the weight, so the header field (offset 76,
+    dictionary index of bobot = 2) is patched like the creation date.
+    """
+    import datetime
+    import pyreadstat
+
+    path = SAV / "metadata.sav"
+    df = pd.DataFrame({
+        "id": [1.0, 2.0, 3.0],
+        "bobot": [1.5, 2.0, 0.5],
+        "tgl": [datetime.date(2026, 1, 1), datetime.date(2026, 1, 2), None],
+        "harga": [1250.5, 99.0, NAN],
+        "kode": ["L", "P", "X"],
+        "kota": ["Jakarta Selatan", "Bandung", "x"],
+    })
+    pyreadstat.write_sav(
+        df, str(path), row_compress=True, file_label="Survei kepuasan",
+        note=["Dokumen baris satu", "baris dua"],
+        column_labels={"bobot": "Bobot sampel", "tgl": "Tanggal survei"},
+        variable_value_labels={"kode": {"L": "Laki-laki", "P": "Perempuan"}, "kota": {"Bandung": "Kota Bandung"}},
+        missing_ranges={"kode": ["X"], "kota": ["x"]},
+        variable_measure={"id": "scale", "bobot": "scale", "tgl": "scale", "harga": "scale",
+                          "kode": "nominal", "kota": "nominal"},
+        variable_format={"id": "F8.0", "bobot": "F8.2", "tgl": "DATE11", "harga": "DOLLAR10.2"},
+    )
+    raw = bytearray(path.read_bytes())
+    raw[76:80] = struct.pack("<i", 2)  # weight = dictionary index of bobot
+    raw[92:101] = SAV_DATE
+    raw[101:109] = SAV_TIME
+    path.write_bytes(bytes(raw))
+    _, meta = pyreadstat.read_sav(str(path), metadataonly=True)
+    assert meta.original_variable_types == {"id": "F8.0", "bobot": "F8.2", "tgl": "DATE11", "harga": "DOLLAR10.2",
+                                            "kode": "A1", "kota": "A15"}, meta.original_variable_types
 
 
 def write_import_fixtures():

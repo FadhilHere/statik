@@ -101,13 +101,23 @@ fn classify(s: &str, decimal_comma: bool) -> Cell {
     }
 }
 
+/// Valid, unique (case-insensitive) variable names for the header texts, in order.
+fn variable_names(headers: &[String]) -> Vec<String> {
+    let mut used: HashSet<String> = HashSet::new();
+    headers
+        .iter()
+        .map(|raw| {
+            let name = sanitize_name(raw, &|c: &str| used.contains(&c.to_lowercase()));
+            used.insert(name.to_lowercase());
+            name
+        })
+        .collect()
+}
+
 /// Build a dataset from header texts and columns of cells. A column is numeric when none of its cells is text.
 pub(crate) fn build_dataset(headers: &[String], cols: Vec<Vec<Cell>>) -> Result<Dataset, SavError> {
     let mut ds = Dataset::new();
-    let mut used: HashSet<String> = HashSet::new();
-    for (raw, cells) in headers.iter().zip(cols) {
-        let name = sanitize_name(raw, &|c: &str| used.contains(&c.to_lowercase()));
-        used.insert(name.to_lowercase());
+    for ((raw, name), cells) in headers.iter().zip(variable_names(headers)).zip(cols) {
         let numeric = cells.iter().all(|c| !matches!(c, Cell::Text(_)));
         let mut var;
         let col;
@@ -214,7 +224,7 @@ fn parse_records(text: &str, delim: char, max: Option<usize>) -> Result<Vec<Reco
         }
     }
     if in_quotes {
-        return Err(SavError::Csv(format!("baris {start_line}: tanda kutip tidak ditutup")));
+        return Err(SavError::Csv(format!("line {start_line}: a quoted field is not closed")));
     }
     if !field.is_empty() || !fields.is_empty() || quoted {
         end_field(&mut fields, &mut field, &mut quoted, true);
@@ -258,31 +268,97 @@ fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// Import a CSV/TXT file. See [`CsvOptions`]; the delimiter is the most frequent and consistent one of
-/// `,` `;` tab over the first 20 lines, and a `,` decimal separator is detected when the delimiter is not `,`.
-pub fn import_csv(path: &Path, opt: &CsvOptions) -> Result<Dataset, SavError> {
+/// Decide the decimal separator when the options leave it open.
+///
+/// - `,` delimiter: decimal point.
+/// - `;` or tab delimiter (Indonesian / European Excel exports): decimal comma, with `.` as the
+///   thousands separator, so `750.000` is 750000. Only when some cell makes sense with a decimal
+///   point but not with a decimal comma (`78.5`, `3.14159`) and no cell needs the decimal comma
+///   (`78,5`, `1.234,5`) does the file use decimal points.
+/// - No delimiter (one column): decimal comma only if some cell needs it (`78,5`).
+fn detect_decimal_comma<'a>(delim: char, mut cells: impl Iterator<Item = &'a String>) -> bool {
+    match delim {
+        ',' => false,
+        ';' | '\t' => {
+            let (mut comma_only, mut dot_only) = (false, false);
+            for c in cells {
+                let dot = parse_number(c, false).is_some();
+                let comma = parse_number(c, true).is_some();
+                comma_only |= comma && !dot;
+                dot_only |= dot && !comma;
+            }
+            comma_only || !dot_only
+        }
+        _ => cells.any(|c| c.contains(',') && parse_number(c, true).is_some()),
+    }
+}
+
+/// A CSV file split into records with the delimiter and decimal separator decided.
+struct Parsed {
+    delim: char,
+    decimal_comma: bool,
+    headers: Vec<String>,
+    body: Vec<Record>,
+}
+
+fn parse_file(path: &Path, opt: &CsvOptions) -> Result<Parsed, SavError> {
     let text = decode(&std::fs::read(path)?);
     let delim = opt.delimiter.map_or_else(|| detect_delimiter(&text), char::from);
-    let recs = parse_records(&text, delim, None)?;
+    let mut recs = parse_records(&text, delim, None)?;
     let Some((_, first)) = recs.first() else {
-        return Err(SavError::Csv("file kosong".into()));
+        return Err(SavError::Csv("the file is empty".into()));
     };
     let width = first.len();
     for (line, r) in &recs {
         if r.len() != width {
-            return Err(SavError::Csv(format!("baris {line}: {} kolom, seharusnya {width}", r.len())));
+            let fields = if r.len() == 1 { "field" } else { "fields" };
+            return Err(SavError::Csv(format!("line {line} has {} {fields}, expected {width}", r.len())));
         }
     }
-    let (headers, body): (Vec<String>, &[Record]) =
-        if opt.header { (first.clone(), &recs[1..]) } else { (vec![String::new(); width], &recs[..]) };
-    let decimal_comma = opt.decimal_comma.unwrap_or_else(|| {
-        delim != ',' && body.iter().flat_map(|r| &r.1).any(|c| c.contains(',') && parse_number(c, true).is_some())
-    });
-    let mut cols: Vec<Vec<Cell>> = vec![Vec::with_capacity(body.len()); width];
-    for (_, r) in body {
+    let headers = if opt.header { recs.remove(0).1 } else { vec![String::new(); width] };
+    let decimal_comma =
+        opt.decimal_comma.unwrap_or_else(|| detect_decimal_comma(delim, recs.iter().flat_map(|r| &r.1)));
+    Ok(Parsed { delim, decimal_comma, headers, body: recs })
+}
+
+/// Import a CSV/TXT file. See [`CsvOptions`]; the delimiter is the most frequent and consistent one of
+/// `,` `;` tab over the first 20 lines. The decimal separator rule is described in KNOWN_GAPS.md
+/// ("CSV / XLSX import"): with `;` or tab a `.` is a thousands separator unless the file shows otherwise.
+pub fn import_csv(path: &Path, opt: &CsvOptions) -> Result<Dataset, SavError> {
+    let p = parse_file(path, opt)?;
+    let mut cols: Vec<Vec<Cell>> = vec![Vec::with_capacity(p.body.len()); p.headers.len()];
+    for (_, r) in &p.body {
         for (col, cell) in cols.iter_mut().zip(r) {
-            col.push(classify(cell, decimal_comma));
+            col.push(classify(cell, p.decimal_comma));
         }
     }
-    build_dataset(&headers, cols)
+    build_dataset(&p.headers, cols)
+}
+
+/// What [`import_csv`] would do with a file, for an import dialog's preview.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CsvPreview {
+    /// The delimiter used (detected or given); `0` when the file has a single column.
+    pub delimiter: u8,
+    /// Whether `,` is the decimal separator (detected or given).
+    pub decimal_comma: bool,
+    /// The variable names the import would create (sanitized, unique).
+    pub header: Vec<String>,
+    /// The header cells as in the file (empty strings when `header` is off).
+    pub raw_header: Vec<String>,
+    /// The first data rows (at most `max_rows`), as raw cell text.
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Parse a CSV file like [`import_csv`] and report the detected settings, the variable names and the
+/// first `max_rows` data rows. Errors are the same as [`import_csv`]'s.
+pub fn sniff_csv(path: &Path, opt: &CsvOptions, max_rows: usize) -> Result<CsvPreview, SavError> {
+    let p = parse_file(path, opt)?;
+    Ok(CsvPreview {
+        delimiter: u8::try_from(p.delim).unwrap_or(0),
+        decimal_comma: p.decimal_comma,
+        header: variable_names(&p.headers),
+        raw_header: p.headers,
+        rows: p.body.into_iter().take(max_rows).map(|r| r.1).collect(),
+    })
 }

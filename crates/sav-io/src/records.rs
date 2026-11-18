@@ -23,6 +23,11 @@ pub(crate) const SUB_DISPLAY: i32 = 11;
 pub(crate) const SUB_LONG_NAMES: i32 = 13;
 pub(crate) const SUB_VERY_LONG_STRINGS: i32 = 14;
 pub(crate) const SUB_ENCODING: i32 = 20;
+pub(crate) const SUB_LONG_STRING_LABELS: i32 = 21;
+pub(crate) const SUB_LONG_STRING_MISSING: i32 = 22;
+
+/// Header bytes holding the 64-byte file label.
+pub(crate) const FILE_LABEL: std::ops::Range<usize> = 109..173;
 
 /// SPSS format type codes used for print/write formats.
 pub(crate) const FMT_A: u32 = 1;

@@ -104,14 +104,14 @@ const FIXTURES: [&str; 6] =
 fn reads_every_fixture_like_the_reference_json() {
     let exp = expected();
     for file in FIXTURES {
-        let ds = read_sav(&fixture(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let ds = read_sav(&fixture(file)).unwrap_or_else(|e| panic!("{file}: {e}")).0;
         assert_matches_json(file, &ds, &exp["files"][file]);
     }
 }
 
 #[test]
 fn windows_1252_text_is_decoded() {
-    let ds = read_sav(&fixture("cp1252.sav")).unwrap();
+    let ds = read_sav(&fixture("cp1252.sav")).unwrap().0;
     let kota = ds.find("kota").unwrap();
     assert_eq!(ds.var(kota).label.as_deref(), Some("Kota asal (é)"));
     match ds.column(kota) {
@@ -123,7 +123,7 @@ fn windows_1252_text_is_decoded() {
 #[test]
 fn negative_zero_is_normalised() {
     for file in ["basic.sav", "uncompressed.sav"] {
-        let ds = read_sav(&fixture(file)).unwrap();
+        let ds = read_sav(&fixture(file)).unwrap().0;
         let skor = ds.numeric(ds.find("skor").unwrap());
         assert_eq!(skor[1].to_bits(), 0.0f64.to_bits(), "{file}");
     }
@@ -133,10 +133,10 @@ fn negative_zero_is_normalised() {
 fn round_trip_is_identical() {
     let exp = expected();
     for file in FIXTURES {
-        let first = read_sav(&fixture(file)).unwrap();
+        let first = read_sav(&fixture(file)).unwrap().0;
         let out = tmp(&format!("roundtrip_{file}"));
         write_sav(&first, &out).unwrap_or_else(|e| panic!("{file}: {e}"));
-        let second = read_sav(&out).unwrap_or_else(|e| panic!("{file} (rewritten): {e}"));
+        let second = read_sav(&out).unwrap_or_else(|e| panic!("{file} (rewritten): {e}")).0;
         assert_matches_json(file, &second, &exp["files"][file]);
     }
 }
@@ -150,7 +150,7 @@ fn writes_unique_short_names() {
     }
     let out = tmp("short_names.sav");
     write_sav(&ds, &out).unwrap();
-    let back = read_sav(&out).unwrap();
+    let back = read_sav(&out).unwrap().0;
     let names: Vec<_> = ids(&back).into_iter().map(|id| back.var(id).name.clone()).collect();
     assert_eq!(names, ["pendapatan_a", "pendapatan_b", "PENDAPATAN", "pendapat", "x"]);
 }
@@ -183,7 +183,7 @@ fn pyreadstat_json(path: &Path) -> Option<Value> {
 #[test]
 fn pyreadstat_reads_statik_output() {
     for file in FIXTURES {
-        let ds = read_sav(&fixture(file)).unwrap();
+        let ds = read_sav(&fixture(file)).unwrap().0;
         let out = tmp(&format!("pyreadstat_{file}"));
         write_sav(&ds, &out).unwrap();
         let Some(got) = pyreadstat_json(&out) else { return };
@@ -242,7 +242,7 @@ fn pyreadstat_reads_statik_output() {
 
 #[test]
 fn truncated_files_are_format_errors() {
-    for file in ["basic.sav", "uncompressed.sav", "long_string.sav", "bigendian.sav"] {
+    for file in ["basic.sav", "uncompressed.sav", "long_string.sav", "bigendian.sav", "metadata.sav"] {
         let bytes = std::fs::read(fixture(file)).unwrap();
         let out = tmp(&format!("truncated_{file}"));
         let mut offsets: Vec<usize> = vec![0, 3, 4, 100, 175, 176, 180, bytes.len() / 2, bytes.len() - 8, bytes.len() - 1];
@@ -264,7 +264,7 @@ fn truncated_files_are_format_errors() {
 /// Overwriting single bytes with extreme values must give a result or an error, never a panic.
 #[test]
 fn corrupted_bytes_do_not_panic() {
-    for file in ["basic.sav", "long_string.sav", "bigendian.sav"] {
+    for file in ["basic.sav", "long_string.sav", "bigendian.sav", "metadata.sav"] {
         let bytes = std::fs::read(fixture(file)).unwrap();
         let out = tmp(&format!("corrupt_{file}"));
         for pos in (0..bytes.len()).step_by(17) {
@@ -358,7 +358,7 @@ fn huge_case_count_with_many_variables_is_an_error_not_an_abort() {
         let out = tmp(&format!("huge_ncases_{compression}.sav"));
         std::fs::write(&out, bytes).unwrap();
         let r = read_sav(&out);
-        assert!(matches!(r, Err(SavError::Format(_))), "compression {compression}: {:?}", r.map(|d| d.n_cases()));
+        assert!(matches!(r, Err(SavError::Format(_))), "compression {compression}: {:?}", r.map(|d| d.0.n_cases()));
     }
 }
 
@@ -371,7 +371,7 @@ fn display_record_with_two_values_per_variable() {
     let data: Vec<u8> = [1.0f64, 2.0, 3.0].iter().flat_map(|v| v.to_le_bytes()).collect();
     let out = tmp("display2.sav");
     std::fs::write(&out, build_sav(&vars, &[(11, 4, display)], 0, 1, &data)).unwrap();
-    let ds = read_sav(&out).unwrap();
+    let ds = read_sav(&out).unwrap().0;
     let m: Vec<Measure> = ids(&ds).into_iter().map(|id| ds.var(id).measure).collect();
     assert_eq!(m, [Measure::Nominal, Measure::Ordinal, Measure::Nominal]);
 }
@@ -384,7 +384,7 @@ fn shift_jis_code_page() {
     data.resize(8, b' ');
     let out = tmp("sjis.sav");
     std::fs::write(&out, build_sav(&[(&name, 8)], &[integer_info(932)], 0, 1, &data)).unwrap();
-    let ds = read_sav(&out).unwrap();
+    let ds = read_sav(&out).unwrap().0;
     assert_eq!(ds.var(VarId(0)).name, "名前");
     match ds.column(VarId(0)) {
         Column::Text(v) => assert_eq!(v[0], "日本"),
@@ -403,7 +403,7 @@ fn very_long_string_record_uses_file_encoding() {
     data.resize(256 + 48, b' ');
     let out = tmp("vls_cp1252.sav");
     std::fs::write(&out, build_sav(&vars, &ext, 0, 1, &data)).unwrap();
-    let ds = read_sav(&out).unwrap();
+    let ds = read_sav(&out).unwrap().0;
     assert_eq!(ds.n_vars(), 1);
     assert_eq!(ds.var(VarId(0)).name, "KÖM");
     assert_eq!(ds.var(VarId(0)).var_type, VarType::String { width: 300 });
@@ -411,4 +411,157 @@ fn very_long_string_record_uses_file_encoding() {
         Column::Text(v) => assert_eq!(v[0], "a".repeat(255) + &"b".repeat(45)),
         Column::Numeric(_) => panic!("expected a string"),
     }
+}
+
+#[test]
+fn reference_fixtures_read_without_notes() {
+    for file in FIXTURES {
+        let (_, report) = read_sav(&fixture(file)).unwrap();
+        assert!(report.notes.is_empty(), "{file}: {:?}", report.notes);
+    }
+}
+
+/// 2026-01-01 as an SPSS date: seconds since 1582-10-14.
+const JAN_1_2026: f64 = 13_986_604_800.0;
+
+fn strings(xs: &[&str]) -> Vec<String> {
+    xs.iter().map(|s| s.to_string()).collect()
+}
+
+fn str_labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+/// Everything metadata.sav holds beyond sav_basic (see gen_refs.py write_sav_metadata_fixture).
+fn assert_metadata(ctx: &str, ds: &Dataset) {
+    let id = |n: &str| ds.find(n).unwrap_or_else(|| panic!("{ctx}: no {n}"));
+    assert_eq!(ds.weight(), Some(id("bobot")), "{ctx}: weight");
+    assert_eq!(ds.file_label(), Some("Survei kepuasan"), "{ctx}");
+    assert_eq!(ds.documents(), ["Dokumen baris satu", "baris dua"], "{ctx}");
+    let tgl = ds.var(id("tgl"));
+    assert_eq!((tgl.format_type, tgl.width, tgl.decimals), (Some(20), 11, 0), "{ctx}: DATE11");
+    assert!(tgl.has_date_format());
+    assert_eq!(tgl.label.as_deref(), Some("Tanggal survei"));
+    assert_eq!(ds.numeric(id("tgl"))[0], JAN_1_2026, "{ctx}");
+    assert_eq!(ds.numeric(id("tgl"))[1], JAN_1_2026 + 86_400.0, "{ctx}");
+    assert!(ds.numeric(id("tgl"))[2].is_nan(), "{ctx}");
+    let harga = ds.var(id("harga"));
+    assert_eq!((harga.format_type, harga.width, harga.decimals), (Some(4), 10, 2), "{ctx}: DOLLAR10.2");
+    assert_eq!(ds.var(id("id")).format_type, None, "{ctx}: F is None");
+    let kode = ds.var(id("kode"));
+    assert_eq!(kode.var_type, VarType::String { width: 1 }, "{ctx}");
+    assert_eq!(kode.string_value_labels, str_labels(&[("L", "Laki-laki"), ("P", "Perempuan")]), "{ctx}");
+    assert_eq!(kode.string_missing, strings(&["X"]), "{ctx}");
+    let kota = ds.var(id("kota"));
+    assert_eq!(kota.var_type, VarType::String { width: 15 }, "{ctx}");
+    assert_eq!(kota.string_value_labels, str_labels(&[("Bandung", "Kota Bandung")]), "{ctx}");
+    assert_eq!(kota.string_missing, strings(&["x"]), "{ctx}");
+    match ds.column(id("kota")) {
+        Column::Text(t) => assert_eq!(t, &strings(&["Jakarta Selatan", "Bandung", "x"]), "{ctx}"),
+        Column::Numeric(_) => panic!("{ctx}: kota should be a string"),
+    }
+}
+
+#[test]
+fn metadata_fixture_is_read_with_notes() {
+    let (ds, report) = read_sav(&fixture("metadata.sav")).unwrap();
+    assert_metadata("metadata.sav", &ds);
+    assert_eq!(
+        report.notes,
+        [
+            "Weight variable bobot is ignored by Statik analyses (results are unweighted).",
+            "Variable tgl has a date format; dates are shown as numbers (seconds since 1582-10-14).",
+        ]
+    );
+}
+
+/// Weight, formats, string value labels / missing values, file label and documents survive a
+/// save, and an independent reader (pyreadstat) sees them in Statik's file.
+#[test]
+fn metadata_fixture_round_trips() {
+    let (first, _) = read_sav(&fixture("metadata.sav")).unwrap();
+    let out = tmp("roundtrip_metadata.sav");
+    write_sav(&first, &out).unwrap();
+    let (second, report) = read_sav(&out).unwrap();
+    assert_metadata("rewritten", &second);
+    assert_eq!(report.notes.len(), 2, "{:?}", report.notes);
+
+    let Some(got) = pyreadstat_json(&out) else { return };
+    assert_eq!(got["file_label"], "Survei kepuasan");
+    assert_eq!(got["notes"], serde_json::json!(["Dokumen baris satu", "baris dua"]));
+    assert_eq!(got["weight_index"], 2);
+    let vars = got["variables"].as_array().unwrap();
+    let by_name = |n: &str| vars.iter().find(|v| v["name"] == n).unwrap_or_else(|| panic!("{n}"));
+    assert_eq!(by_name("tgl")["format"], "DATE11");
+    assert_eq!(by_name("tgl")["values"][0], JAN_1_2026);
+    assert_eq!(by_name("harga")["format"], "DOLLAR10.2");
+    assert_eq!(by_name("id")["format"], "F8.0");
+    assert_eq!(by_name("kode")["value_labels"], serde_json::json!([["L", "Laki-laki"], ["P", "Perempuan"]]));
+    assert_eq!(by_name("kode")["missing"], serde_json::json!([{"lo": "X", "hi": "X"}]));
+    assert_eq!(by_name("kota")["format"], "A15");
+    assert_eq!(by_name("kota")["value_labels"], serde_json::json!([["Bandung", "Kota Bandung"]]));
+    assert_eq!(by_name("kota")["missing"], serde_json::json!([{"lo": "x", "hi": "x"}]));
+}
+
+/// Reserved words are not variable names: a file using one is renamed on read, with a note.
+#[test]
+fn reserved_names_are_renamed_on_read_with_a_note() {
+    let vars: [(&[u8], i32); 2] = [(b"AND", 0), (b"X", 0)];
+    let data: Vec<u8> = [1.0f64, 2.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let out = tmp("reserved.sav");
+    std::fs::write(&out, build_sav(&vars, &[], 0, 1, &data)).unwrap();
+    let (ds, report) = read_sav(&out).unwrap();
+    assert_eq!(ds.var(VarId(0)).name, "AND_1");
+    assert_eq!(report.notes, ["Variable name 'AND' is not valid in Statik; it was renamed to 'AND_1'."]);
+}
+
+/// A numeric column on a string variable is an internal inconsistency, not an invalid file;
+/// the failed save leaves the existing file untouched and no temporary file behind.
+#[test]
+fn failed_save_is_internal_error_and_keeps_existing_file() {
+    let out = tmp("keep_existing.sav");
+    std::fs::write(&out, b"original bytes").unwrap();
+    let mut ds = Dataset::new();
+    ds.add_variable(Variable::numeric("x"), Column::Numeric(vec![1.0])).unwrap();
+    ds.var_mut(VarId(0)).var_type = VarType::String { width: 8 };
+    let e = write_sav(&ds, &out).unwrap_err();
+    assert!(matches!(e, SavError::Internal(_)), "{e:?}");
+    assert_eq!(e.to_string(), "Cannot save: variable 'x' has a numeric column but a string type");
+    assert_eq!(std::fs::read(&out).unwrap(), b"original bytes");
+    assert!(!tmp("keep_existing.sav.tmp").exists());
+}
+
+#[test]
+fn save_replaces_existing_file_without_leaving_a_temporary_file() {
+    let out = tmp("replace_existing.sav");
+    std::fs::write(&out, b"old").unwrap();
+    let (ds, _) = read_sav(&fixture("basic.sav")).unwrap();
+    write_sav(&ds, &out).unwrap();
+    assert_eq!(read_sav(&out).unwrap().0.n_vars(), ds.n_vars());
+    assert!(!tmp("replace_existing.sav.tmp").exists());
+}
+
+/// A save into a folder that does not exist fails with an i/o error and creates nothing.
+#[test]
+fn save_into_missing_folder_is_io_error() {
+    let out = tmp("no_such_dir").join("x.sav");
+    let (ds, _) = read_sav(&fixture("basic.sav")).unwrap();
+    assert!(matches!(write_sav(&ds, &out), Err(SavError::Io(_))));
+    assert!(!out.exists());
+}
+
+/// String missing values: at most 3, each at most 8 bytes (the .sav format's limits).
+#[test]
+fn string_missing_value_limits() {
+    let mut ds = Dataset::new();
+    let mut v = Variable::string("s", 20);
+    v.string_missing = strings(&["123456789"]);
+    ds.add_variable(v, Column::Text(strings(&["a"]))).unwrap();
+    assert!(matches!(write_sav(&ds, &tmp("smiss1.sav")), Err(SavError::Unsupported(_))));
+    ds.var_mut(VarId(0)).string_missing = strings(&["a", "b", "c", "d"]);
+    assert!(matches!(write_sav(&ds, &tmp("smiss2.sav")), Err(SavError::Unsupported(_))));
+    ds.var_mut(VarId(0)).string_missing = strings(&["a", "b", "c"]);
+    write_sav(&ds, &tmp("smiss3.sav")).unwrap();
+    let (back, _) = read_sav(&tmp("smiss3.sav")).unwrap();
+    assert_eq!(back.var(VarId(0)).string_missing, strings(&["a", "b", "c"]));
 }
