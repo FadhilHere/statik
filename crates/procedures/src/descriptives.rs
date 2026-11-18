@@ -1,5 +1,5 @@
 //! Descriptives (SPSS DESCRIPTIVES, optionally /SAVE standardized values).
-use crate::cells::{empty, fixed_plus, group, label, leaf, num, num_or_empty, warning};
+use crate::cells::{check_ids, empty, fixed_plus, group, label, leaf, num, num_or_empty, warning};
 use dataset::{Column, Dataset, DatasetError, VarId, VarType, Variable};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::describe;
@@ -14,6 +14,9 @@ pub struct DescriptivesOptions {
 /// Run the procedure. With `save_z`, a variable `Z<name>` is added per analysed variable (`ZSC001`, ... when the
 /// name is taken). Each variable uses its own valid cases; the table's "Valid N (listwise)" row uses complete cases.
 pub fn run_descriptives(ds: &mut Dataset, o: &DescriptivesOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &o.vars, "Descriptives") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("Descriptives".into())];
     let mut names = vec![];
     let mut cells = vec![];
@@ -28,7 +31,10 @@ pub fn run_descriptives(ds: &mut Dataset, o: &DescriptivesOptions) -> Vec<Output
         }
         let x: Vec<f64> = (0..ds.n_cases()).filter(|&r| !ds.is_missing(id, r)).map(|r| ds.numeric(id)[r]).collect();
         let Some(d) = describe(&x) else {
-            warns.extend(warning(format!("Descriptives: variable {} has no valid cases. It has been omitted.", var.name)));
+            warns.extend(warning(format!(
+                "Descriptives: variable {} has no valid cases. It has been omitted.",
+                var.name
+            )));
             continue;
         };
         let dec = var.decimals;

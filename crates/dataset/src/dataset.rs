@@ -10,6 +10,8 @@ pub enum DatasetError {
     LengthMismatch { expected: usize, got: usize },
     #[error("column type does not match variable type")]
     TypeMismatch,
+    #[error("index out of range: {0}")]
+    OutOfRange(usize),
     #[error("csv error: {0}")]
     Csv(String),
     #[error("io error: {0}")]
@@ -54,11 +56,7 @@ pub fn validate_name(name: &str) -> Result<(), DatasetError> {
     if name.chars().count() > 64 {
         return bad();
     }
-    if chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '#' | '@')) {
-        Ok(())
-    } else {
-        bad()
-    }
+    if chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '#' | '@')) { Ok(()) } else { bad() }
 }
 
 impl Dataset {
@@ -128,6 +126,141 @@ impl Dataset {
     /// Rows with no missing value in any of `ids`.
     pub fn listwise_rows(&self, ids: &[VarId]) -> Vec<usize> {
         (0..self.n_cases()).filter(|&r| ids.iter().all(|&id| !self.is_missing(id, r))).collect()
+    }
+
+    /// Checked lookup: `None` when `id` is stale / out of range.
+    pub fn try_var(&self, id: VarId) -> Option<&Variable> {
+        self.vars.get(id.0)
+    }
+
+    /// Insert a variable at position `at` (`at <= n_vars`). Later variables shift one
+    /// position right, so their positional `VarId`s change.
+    pub fn insert_variable(&mut self, at: usize, v: Variable, col: Column) -> Result<VarId, DatasetError> {
+        if at > self.vars.len() {
+            return Err(DatasetError::OutOfRange(at));
+        }
+        self.add_variable(v, col)?; // validates, appends last
+        let v = self.vars.pop().expect("just pushed");
+        let c = self.cols.pop().expect("just pushed");
+        self.vars.insert(at, v);
+        self.cols.insert(at, c);
+        Ok(VarId(at))
+    }
+
+    /// Remove a variable and its column. Because `VarId` is a positional index, every
+    /// variable after `id` shifts one position left (its `VarId` decreases by one).
+    pub fn delete_variable(&mut self, id: VarId) -> Result<(), DatasetError> {
+        if id.0 >= self.vars.len() {
+            return Err(DatasetError::OutOfRange(id.0));
+        }
+        self.vars.remove(id.0);
+        self.cols.remove(id.0);
+        Ok(())
+    }
+
+    pub fn rename_variable(&mut self, id: VarId, new_name: &str) -> Result<(), DatasetError> {
+        if id.0 >= self.vars.len() {
+            return Err(DatasetError::OutOfRange(id.0));
+        }
+        validate_name(new_name)?;
+        if self.find(new_name).is_some_and(|other| other != id) {
+            return Err(DatasetError::DuplicateName(new_name.to_string()));
+        }
+        self.vars[id.0].name = new_name.to_string();
+        Ok(())
+    }
+
+    /// Insert a blank case (NaN / "") before row `at` (clamped to the end).
+    pub fn insert_case(&mut self, at: usize) {
+        let at = at.min(self.n_cases());
+        for c in &mut self.cols {
+            match c {
+                Column::Numeric(v) => v.insert(at, f64::NAN),
+                Column::Text(v) => v.insert(at, String::new()),
+            }
+        }
+    }
+
+    pub fn delete_case(&mut self, row: usize) -> Result<(), DatasetError> {
+        if row >= self.n_cases() {
+            return Err(DatasetError::OutOfRange(row));
+        }
+        for c in &mut self.cols {
+            match c {
+                Column::Numeric(v) => {
+                    v.remove(row);
+                }
+                Column::Text(v) => {
+                    v.remove(row);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Set a numeric cell (-0.0 is stored as 0.0).
+    pub fn set_numeric(&mut self, id: VarId, row: usize, v: f64) -> Result<(), DatasetError> {
+        match self.cols.get_mut(id.0) {
+            None => Err(DatasetError::OutOfRange(id.0)),
+            Some(Column::Text(_)) => Err(DatasetError::TypeMismatch),
+            Some(Column::Numeric(c)) => match c.get_mut(row) {
+                None => Err(DatasetError::OutOfRange(row)),
+                Some(cell) => {
+                    *cell = v + 0.0;
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    pub fn set_text(&mut self, id: VarId, row: usize, s: &str) -> Result<(), DatasetError> {
+        match self.cols.get_mut(id.0) {
+            None => Err(DatasetError::OutOfRange(id.0)),
+            Some(Column::Numeric(_)) => Err(DatasetError::TypeMismatch),
+            Some(Column::Text(c)) => match c.get_mut(row) {
+                None => Err(DatasetError::OutOfRange(row)),
+                Some(cell) => {
+                    *cell = s.to_string();
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    /// Convert a variable's type, converting values. Numeric -> String formats each value
+    /// with the variable's decimals ("" for NaN; width = max(8, longest)). String -> Numeric
+    /// parses the trimmed text (failure / non-finite -> NaN). Value labels and missing
+    /// specs are reset; a same-type call is a no-op.
+    pub fn set_type(&mut self, id: VarId, t: VarType) -> Result<(), DatasetError> {
+        let Some(var) = self.vars.get(id.0) else {
+            return Err(DatasetError::OutOfRange(id.0));
+        };
+        match (&self.cols[id.0], t) {
+            (Column::Numeric(v), VarType::String { .. }) => {
+                let dec = var.decimals;
+                let text: Vec<String> = v
+                    .iter()
+                    .map(|&x| if x.is_nan() { String::new() } else { format!("{:.*}", dec, x + 0.0) })
+                    .collect();
+                let width = text.iter().map(|s| s.chars().count()).max().unwrap_or(0).max(8);
+                let mut nv = Variable::string(&var.name, width);
+                nv.label = var.label.clone();
+                self.vars[id.0] = nv;
+                self.cols[id.0] = Column::Text(text);
+            }
+            (Column::Text(v), VarType::Numeric) => {
+                let nums: Vec<f64> = v
+                    .iter()
+                    .map(|s| s.trim().parse::<f64>().ok().filter(|x| x.is_finite()).map_or(f64::NAN, |x| x + 0.0))
+                    .collect();
+                let mut nv = Variable::numeric(&var.name);
+                nv.label = var.label.clone();
+                self.vars[id.0] = nv;
+                self.cols[id.0] = Column::Numeric(nums);
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `prefix` + smallest n >= 1 such that the name is unused.

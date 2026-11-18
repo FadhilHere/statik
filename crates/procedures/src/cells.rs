@@ -65,3 +65,21 @@ pub(crate) fn df_cell(df: f64) -> Cell {
 }
 
 pub(crate) const SD_ZERO_MSG: &str = "t cannot be computed because the standard deviation is 0.";
+
+/// Stale-id guard: `VarId` is positional, so after structural edits an id may be out of range.
+/// Returns a single Warning item for the first missing variable.
+pub(crate) fn check_ids(ds: &Dataset, ids: &[VarId], proc_name: &str) -> Result<(), Vec<OutputItem>> {
+    match ids.iter().find(|id| ds.try_var(**id).is_none()) {
+        Some(id) => Err(warning(format!("{proc_name}: variable no longer exists (index {}).", id.0))),
+        None => Ok(()),
+    }
+}
+
+/// Like [`check_ids`], and additionally every id must be a numeric variable.
+pub(crate) fn check_numeric_ids(ds: &Dataset, ids: &[VarId], proc_name: &str) -> Result<(), Vec<OutputItem>> {
+    check_ids(ds, ids, proc_name)?;
+    match ids.iter().find(|id| !matches!(ds.var(**id).var_type, dataset::VarType::Numeric)) {
+        Some(id) => Err(warning(format!("{proc_name}: variable {} is not numeric.", ds.var(*id).name))),
+        None => Ok(()),
+    }
+}

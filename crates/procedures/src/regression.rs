@@ -1,6 +1,6 @@
 //! Linear Regression (SPSS REGRESSION, method Enter).
-use dataset::{Column, Dataset, VarId, VarType, Variable};
-use crate::cells::{empty, foot, group, label, leaf, num, num_or_empty, text, warning};
+use crate::cells::{check_numeric_ids, empty, foot, group, label, leaf, num, num_or_empty, text, warning};
+use dataset::{Column, Dataset, VarId, Variable};
 use output_model::{CellFormat, Chart, HeaderNode, OutputItem, Table};
 use stat_core::dist::normal_cdf;
 use stat_core::ols::{OlsError, OlsFit, candidate_stats, ols};
@@ -42,13 +42,17 @@ fn mean_sd(v: &[f64]) -> (f64, f64) {
 
 /// Run the regression; tables and charts in SPSS order. Saved variables are appended to `ds`.
 pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputItem> {
+    {
+        let mut all = vec![opt.dependent];
+        all.extend(&opt.independents);
+        if let Err(w) = check_numeric_ids(ds, &all, "Regression") {
+            return w;
+        }
+    }
     let mut ids = vec![opt.dependent];
     ids.extend(&opt.independents);
     if opt.independents.is_empty() {
         return warning("Regression: no independent variables were specified.");
-    }
-    if let Some(&id) = ids.iter().find(|&&id| !matches!(ds.var(id).var_type, VarType::Numeric)) {
-        return warning(format!("Regression: variable {} is not numeric.", ds.var(id).name));
     }
     let rows = ds.listwise_rows(&ids);
     let y: Vec<f64> = rows.iter().map(|&r| ds.numeric(opt.dependent)[r]).collect();
@@ -67,7 +71,9 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
             ));
         }
         Err(OlsError::NoPredictors) => {
-            return warning("Regression: no independent variable passed the tolerance test. No analysis was performed.");
+            return warning(
+                "Regression: no independent variable passed the tolerance test. No analysis was performed.",
+            );
         }
         Err(OlsError::ZeroVarianceDependent) => {
             return warning(format!(
@@ -163,7 +169,8 @@ fn entered_table(rev: &[String], dep_note: &str, any_excluded: bool) -> Table {
 
 fn summary_table(fit: &OlsFit, opt: &RegressionOptions, pred_note: &str, dep_note: &str) -> Table {
     let mut cols = vec![leaf("R"), leaf("R Square"), leaf("Adjusted R Square"), leaf("Std. Error of the Estimate")];
-    let mut row = vec![foot(num(fit.r, F3), 'a'), num(fit.r2, F3), num(fit.adj_r2, F3), num(fit.se_est, CellFormat::Fixed(5))];
+    let mut row =
+        vec![foot(num(fit.r, F3), 'a'), num(fit.r2, F3), num(fit.adj_r2, F3), num(fit.se_est, CellFormat::Fixed(5))];
     if opt.durbin_watson {
         cols.push(leaf("Durbin-Watson"));
         row.push(num(fit.durbin_watson, F3));
@@ -186,7 +193,13 @@ fn anova_table(fit: &OlsFit, pred_note: &str, dep_note: &str) -> Table {
         col_headers: ["Sum of Squares", "df", "Mean Square", "F", "Sig."].map(leaf).to_vec(),
         row_headers: model_rows(vec!["Regression".into(), "Residual".into(), "Total".into()]),
         cells: vec![
-            vec![num(fit.ss_reg, F3), count(fit.df_reg), num(ms_reg, F3), num(fit.f, F3), foot(num(fit.f_sig, CellFormat::Sig), 'b')],
+            vec![
+                num(fit.ss_reg, F3),
+                count(fit.df_reg),
+                num(ms_reg, F3),
+                num(fit.f, F3),
+                foot(num(fit.f_sig, CellFormat::Sig), 'b'),
+            ],
             vec![num(fit.ss_res, F3), count(fit.df_res), num(ms_res, F3), empty(), empty()],
             vec![num(fit.ss_reg + fit.ss_res, F3), count(fit.df_reg + fit.df_res), empty(), empty(), empty()],
         ],

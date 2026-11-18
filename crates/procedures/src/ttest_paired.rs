@@ -1,5 +1,5 @@
 //! Paired-Samples T Test (SPSS T-TEST PAIRS).
-use crate::cells::{SD_ZERO_MSG, df_cell, fixed_plus, group, label, leaf, num, parent, sig_header, warning};
+use crate::cells::{SD_ZERO_MSG, check_ids, df_cell, fixed_plus, group, label, leaf, num, parent, sig_header, warning};
 use crate::ttest_one::pct;
 use dataset::{Dataset, VarId, VarType};
 use output_model::{Cell, CellFormat, OutputItem, Table};
@@ -12,11 +12,20 @@ pub struct PairedOptions {
 }
 
 fn corr_row(n: usize, c: f64, sig: f64) -> Vec<Cell> {
-    vec![num(n as f64, CellFormat::Count), num(c, CellFormat::Fixed(3)), num(sig / 2.0, CellFormat::Sig), num(sig, CellFormat::Sig)]
+    vec![
+        num(n as f64, CellFormat::Count),
+        num(c, CellFormat::Fixed(3)),
+        num(sig / 2.0, CellFormat::Sig),
+        num(sig, CellFormat::Sig),
+    ]
 }
 
 /// Run the test; each pair uses its own complete cases (per-pair listwise).
 pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
+    let pair_ids: Vec<VarId> = o.pairs.iter().flat_map(|&(a, b)| [a, b]).collect();
+    if let Err(w) = check_ids(ds, &pair_ids, "T-Test") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("T-Test".into())];
     let (mut stat_h, mut stat_rows) = (vec![], vec![]);
     let (mut corr_h, mut corr_rows) = (vec![], vec![]);
@@ -103,7 +112,12 @@ pub fn run_paired(ds: &Dataset, o: &PairedOptions) -> Vec<OutputItem> {
             col_headers: vec![
                 parent(
                     "Paired Differences",
-                    vec![leaf("Mean"), leaf("Std. Deviation"), leaf("Std. Error Mean"), group(&ci, &["Lower", "Upper"])],
+                    vec![
+                        leaf("Mean"),
+                        leaf("Std. Deviation"),
+                        leaf("Std. Error Mean"),
+                        group(&ci, &["Lower", "Upper"]),
+                    ],
                 ),
                 leaf("t"),
                 leaf("df"),

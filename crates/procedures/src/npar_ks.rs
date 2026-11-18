@@ -1,5 +1,5 @@
 //! One-Sample Kolmogorov-Smirnov test for normality (SPSS NPAR TESTS /K-S(NORMAL), Lilliefors corrected).
-use crate::cells::{LOWER_BOUND_NOTE, fixed_plus, foot, group, label, leaf, num, warning};
+use crate::cells::{LOWER_BOUND_NOTE, check_ids, fixed_plus, foot, group, label, leaf, num, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::lilliefors;
@@ -11,6 +11,9 @@ pub struct NparKsOptions {
 
 /// Run the test; missing values are excluded test by test (SPSS default).
 pub fn run_npar_ks(ds: &Dataset, opt: &NparKsOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &opt.vars, "NPar Tests") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("NPar Tests".into())];
     let mut col_headers = vec![];
     let mut cols = vec![];

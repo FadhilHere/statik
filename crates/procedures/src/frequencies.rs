@@ -1,5 +1,5 @@
 //! Frequencies (SPSS FREQUENCIES with optional histogram).
-use crate::cells::{empty, group, label, leaf, num, parent, warning};
+use crate::cells::{check_ids, empty, group, label, leaf, num, parent, warning};
 use dataset::{Dataset, OrderedValue, VarId, VarType};
 use output_model::{Cell, CellFormat, Chart, HeaderNode, OutputItem, Table};
 use std::collections::BTreeMap;
@@ -12,6 +12,9 @@ pub struct FrequenciesOptions {
 
 /// Run the procedure: a Statistics table, then one frequency table (and optional histogram) per variable.
 pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &o.vars, "Frequencies") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("Frequencies".into())];
     let mut stat_h = vec![];
     let mut stat_cols = vec![];
@@ -44,8 +47,9 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
         stat_h.push(leaf(&name));
         stat_cols.push((n_valid, n_missing));
 
-        let vlabel =
-            |v: f64| var.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", var.decimals, v + 0.0));
+        let vlabel = |v: f64| {
+            var.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", var.decimals, v + 0.0))
+        };
         let pct = |c: usize, d: usize| 100.0 * c as f64 / d as f64;
         let f1 = CellFormat::Fixed(1);
         let freq = |c: usize| num(c as f64, CellFormat::Count);

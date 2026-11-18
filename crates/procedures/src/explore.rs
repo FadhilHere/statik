@@ -1,5 +1,5 @@
 //! Explore (SPSS EXAMINE): Case Processing Summary, Descriptives, Tests of Normality, Normal Q-Q plots.
-use crate::cells::{LOWER_BOUND_NOTE, empty, fixed_plus, foot, label, leaf, num, text, warning};
+use crate::cells::{LOWER_BOUND_NOTE, check_ids, empty, fixed_plus, foot, label, leaf, num, text, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{Cell, CellFormat, Chart, HeaderNode, OutputItem, Table};
 use stat_core::{describe, lilliefors, normal_quantile, percentile_haverage, shapiro_wilk, t_quantile, trimmed_mean_5};
@@ -33,6 +33,9 @@ fn is_constant(x: &[f64]) -> bool {
 
 /// Run Explore with listwise exclusion over the dependents (SPSS EXAMINE default).
 pub fn run_explore(ds: &Dataset, opt: &ExploreOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &opt.dependents, "Explore") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("Explore".into())];
     let mut deps = vec![];
     for &id in &opt.dependents {

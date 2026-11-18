@@ -1,7 +1,7 @@
 //! One-Way ANOVA (SPSS ONEWAY /STATISTICS DESCRIPTIVES HOMOGENEITY).
-use crate::cells::{empty, fixed_plus, group, label, leaf, num, warning};
+use crate::cells::{check_numeric_ids, empty, fixed_plus, group, label, leaf, num, warning};
 use crate::ttest_one::pct;
-use dataset::{Dataset, OrderedValue, VarId, VarType};
+use dataset::{Dataset, OrderedValue, VarId};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::{describe, levene_mean, oneway, t_quantile};
 
@@ -15,14 +15,11 @@ pub struct OneWayOptions {
 
 /// Run the analysis; cases missing on the dependent or the factor are excluded.
 pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_numeric_ids(ds, &[o.dependent, o.factor], "Oneway") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("Oneway".into())];
     let (dep, fac) = (ds.var(o.dependent), ds.var(o.factor));
-    for v in [dep, fac] {
-        if !matches!(v.var_type, VarType::Numeric) {
-            out.extend(warning(format!("Oneway: variable {} is not numeric.", v.name)));
-            return out;
-        }
-    }
     let mut keys: Vec<f64> = vec![];
     let mut data: Vec<Vec<f64>> = vec![];
     let mut rows: Vec<(f64, f64)> = (0..ds.n_cases())
@@ -49,8 +46,9 @@ pub fn run_oneway(ds: &Dataset, o: &OneWayOptions) -> Vec<OutputItem> {
         return out;
     };
     let dec = dep.decimals;
-    let glabel =
-        |v: f64| fac.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", fac.decimals, v + 0.0));
+    let glabel = |v: f64| {
+        fac.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", fac.decimals, v + 0.0))
+    };
     let f3 = CellFormat::Fixed(3);
     let count = |v: usize| num(v as f64, CellFormat::Count);
     let all: Vec<f64> = data.iter().flatten().copied().collect();

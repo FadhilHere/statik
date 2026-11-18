@@ -1,5 +1,5 @@
 //! Runs test about the median (SPSS NPAR TESTS /RUNS(MEDIAN)).
-use crate::cells::{fixed_plus, foot, label, leaf, num, warning};
+use crate::cells::{check_ids, fixed_plus, foot, label, leaf, num, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::runs_test_median;
@@ -11,6 +11,9 @@ pub struct RunsOptions {
 
 /// Run the test; missing values are excluded test by test (SPSS default).
 pub fn run_runs(ds: &Dataset, o: &RunsOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &o.vars, "NPar Tests") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("NPar Tests".into())];
     let mut col_headers = vec![];
     let mut cols = vec![];

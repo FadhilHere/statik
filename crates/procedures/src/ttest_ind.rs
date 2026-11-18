@@ -1,6 +1,7 @@
 //! Independent-Samples T Test (SPSS T-TEST GROUPS).
 use crate::cells::{
-    SD_ZERO_MSG, df_cell, empty, fixed_plus, group, label, leaf, num, parent, sig_header, text, warning,
+    SD_ZERO_MSG, check_ids, check_numeric_ids, df_cell, empty, fixed_plus, group, label, leaf, num, parent, sig_header,
+    text, warning,
 };
 use crate::ttest_one::pct;
 use dataset::{Dataset, OrderedValue, VarId, VarType};
@@ -40,12 +41,12 @@ fn test_row(t: &TResult, decimals: usize, levene: Option<(f64, f64)>) -> Vec<Cel
 /// Run the test; a case is used for a test variable when that variable is valid and the grouping
 /// value is one of the two groups (analysis-by-analysis exclusion).
 pub fn run_independent(ds: &Dataset, o: &IndependentOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_numeric_ids(ds, &[o.grouping], "T-Test").and_then(|()| check_ids(ds, &o.test_vars, "T-Test"))
+    {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("T-Test".into())];
     let g = ds.var(o.grouping);
-    if !matches!(g.var_type, VarType::Numeric) {
-        out.extend(warning(format!("T-Test: grouping variable {} is not numeric.", g.name)));
-        return out;
-    }
     let glabel =
         |v: f64| g.value_labels.get(&OrderedValue(v)).cloned().unwrap_or_else(|| format!("{:.*}", g.decimals, v + 0.0));
     let (l1, l2) = (glabel(o.group1), glabel(o.group2));

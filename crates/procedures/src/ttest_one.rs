@@ -1,5 +1,5 @@
 //! One-Sample T Test (SPSS T-TEST /TESTVAL).
-use crate::cells::{SD_ZERO_MSG, df_cell, fixed_plus, group, label, leaf, num, parent, sig_header, warning};
+use crate::cells::{SD_ZERO_MSG, check_ids, df_cell, fixed_plus, group, label, leaf, num, parent, sig_header, warning};
 use dataset::{Dataset, VarId, VarType};
 use output_model::{CellFormat, OutputItem, Table};
 use stat_core::{describe, one_sample_t};
@@ -18,6 +18,9 @@ pub(crate) fn pct(conf: f64) -> String {
 
 /// Run the test; missing values are excluded variable by variable (SPSS default).
 pub fn run_one_sample(ds: &Dataset, o: &OneSampleOptions) -> Vec<OutputItem> {
+    if let Err(w) = check_ids(ds, &o.vars, "T-Test") {
+        return w;
+    }
     let mut out = vec![OutputItem::Title("T-Test".into())];
     let mut stat_rows = vec![];
     let mut test_rows = vec![];
@@ -42,7 +45,8 @@ pub fn run_one_sample(ds: &Dataset, o: &OneSampleOptions) -> Vec<OutputItem> {
             num(d.se_mean, fixed_plus(var.decimals, 3)),
         ]);
         let Some(r) = one_sample_t(&x, o.test_value, o.conf) else {
-            let why = if d.n < 2 { "t cannot be computed because there are fewer than 2 valid cases." } else { SD_ZERO_MSG };
+            let why =
+                if d.n < 2 { "t cannot be computed because there are fewer than 2 valid cases." } else { SD_ZERO_MSG };
             warns.extend(warning(why));
             continue;
         };
