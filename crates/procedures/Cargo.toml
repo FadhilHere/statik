@@ -4,3 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+dataset = { path = "../dataset" }
+stat-core = { path = "../stat-core" }
+output-model = { path = "../output-model" }
+
+[dev-dependencies]
+serde_json = "1"

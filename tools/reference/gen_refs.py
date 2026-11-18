@@ -81,8 +81,36 @@ def case_describe_skripsi60():
     }
 
 
+def case_ols_skripsi60():
+    import statsmodels.api as sm
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+    from statsmodels.stats.stattools import durbin_watson
+
+    df = pd.read_csv(DATA / "skripsi60.csv")
+    X = sm.add_constant(df[["x1", "x2", "x3"]].to_numpy(dtype=float))
+    y = df["y"].to_numpy(dtype=float)
+    fit = sm.OLS(y, X).fit()
+    infl = fit.get_influence()
+    return {
+        "case": "ols_skripsi60",
+        "values": {
+            "params": [float(v) for v in fit.params],
+            "bse": [float(v) for v in fit.bse],
+            "tvalues": [float(v) for v in fit.tvalues],
+            "pvalues": [float(v) for v in fit.pvalues],
+            "rsquared": float(fit.rsquared),
+            "rsquared_adj": float(fit.rsquared_adj),
+            "fvalue": float(fit.fvalue),
+            "f_pvalue": float(fit.f_pvalue),
+            "durbin_watson": float(durbin_watson(fit.resid)),
+            "vif": [float(variance_inflation_factor(X, i)) for i in range(1, X.shape[1])],
+            "sresid": [float(v) for v in infl.resid_studentized_internal],
+        },
+    }
+
+
 # Reference cases are added by later tasks: def case_xxx() -> dict, then append to CASES.
-CASES = [case_describe_skripsi60]
+CASES = [case_describe_skripsi60, case_ols_skripsi60]
 
 
 def main():
