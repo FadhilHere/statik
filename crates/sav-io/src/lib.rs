@@ -26,6 +26,12 @@ pub enum SavError {
     Format(String),
     #[error("unsupported .sav feature: {0}")]
     Unsupported(String),
+    #[error("CSV tidak valid: {0}")]
+    Csv(String),
+    #[error("XLSX tidak valid: {0}")]
+    Xlsx(String),
+    #[error("tipe file tidak didukung: {0}")]
+    UnknownType(String),
 }
 
 /// Open a data file, choosing the reader by extension: `.sav`, `.csv`/`.txt`, `.xlsx`/`.xlsm`/`.xls`/`.ods`.
@@ -35,6 +41,6 @@ pub fn open_any(path: &std::path::Path) -> Result<dataset::Dataset, SavError> {
         "sav" => read_sav(path),
         "csv" | "txt" => import_csv(path, &CsvOptions::default()),
         "xlsx" | "xlsm" | "xls" | "ods" => import_xlsx(path, None, true),
-        other => Err(SavError::Unsupported(format!("file type '.{other}'"))),
+        other => Err(SavError::UnknownType(format!(".{other}"))),
     }
 }

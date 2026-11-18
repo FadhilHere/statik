@@ -61,7 +61,7 @@ fn messy_headers_get_valid_unique_names() {
 fn ragged_row_reports_line_number() {
     let p = temp_csv("ragged.csv", b"a,b,c\n1,2,3\n4,5\n6,7,8\n");
     match import_csv(&p, &auto()) {
-        Err(SavError::Format(m)) => assert!(m.starts_with("baris 3:"), "{m}"),
+        Err(SavError::Csv(m)) => assert!(m.starts_with("baris 3:"), "{m}"),
         other => panic!("expected Format error, got {other:?}"),
     }
 }
@@ -187,7 +187,7 @@ fn xlsx_first_sheet_default_and_dates_as_serials() {
 
 #[test]
 fn xlsx_unknown_sheet_is_an_error() {
-    assert!(matches!(import_xlsx(&fixture("data/sample.xlsx"), Some("Nope"), true), Err(SavError::Format(_))));
+    assert!(matches!(import_xlsx(&fixture("data/sample.xlsx"), Some("Nope"), true), Err(SavError::Xlsx(_))));
 }
 
 #[test]
@@ -199,5 +199,38 @@ fn open_any_dispatches_on_extension() {
     let xlsx = open_any(&fixture("data/sample.xlsx")).unwrap();
     assert!(xlsx.find("Nilai").is_some());
     let p = temp_csv("x.docx", b"zzz");
-    assert!(matches!(open_any(&p), Err(SavError::Unsupported(_))));
+    assert!(matches!(open_any(&p), Err(SavError::UnknownType(_))));
+}
+
+#[test]
+fn single_column_with_decimal_commas() {
+    let p = temp_csv("single.csv", b"Nilai\r\n78,5\r\n80\r\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(names(&ds), ["Nilai"]);
+    assert_eq!(num(&ds, "Nilai"), [78.5, 80.0]);
+    assert_eq!(ds.var(ds.find("Nilai").unwrap()).decimals, 1);
+}
+
+#[test]
+fn errors_name_their_source() {
+    let p = temp_csv("ragged2.csv", b"a,b\n1,2\n3\n");
+    let e = import_csv(&p, &auto()).unwrap_err().to_string();
+    assert!(e.starts_with("CSV tidak valid: baris 3"), "{e}");
+    let e = import_xlsx(&fixture("data/sample.xlsx"), Some("Nope"), true).unwrap_err().to_string();
+    assert!(e.starts_with("XLSX tidak valid:"), "{e}");
+}
+
+#[test]
+fn integers_beyond_15_digits_stay_text_but_leading_zeros_stay_numeric() {
+    let p = temp_csv("nik.csv", b"nik,kode\n3201234567890123,007\n3201234567890124,008\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    match ds.column(ds.find("nik").unwrap()) {
+        Column::Text(t) => assert_eq!(t[0], "3201234567890123"),
+        _ => panic!("16-digit column must be text"),
+    }
+    assert_eq!(num(&ds, "kode"), [7.0, 8.0]);
+    // Exactly 15 digits is still numeric.
+    let p = temp_csv("d15.csv", b"x\n123456789012345\n");
+    let ds = import_csv(&p, &auto()).unwrap();
+    assert_eq!(num(&ds, "x"), [123456789012345.0]);
 }

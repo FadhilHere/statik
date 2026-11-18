@@ -66,6 +66,10 @@ pub(crate) fn parse_number(s: &str, decimal_comma: bool) -> Option<(f64, usize)>
     if !frac.bytes().all(|b| b.is_ascii_digit()) || (int_digits.is_empty() && frac.is_empty()) {
         return None;
     }
+    // More than 15 significant digits in an integer would lose precision as f64: keep it as text.
+    if frac.is_empty() && exp.is_none() && int_digits.trim_start_matches('0').len() > 15 {
+        return None;
+    }
     let mut norm = String::new();
     if neg {
         norm.push('-');
@@ -140,7 +144,7 @@ pub(crate) fn build_dataset(headers: &[String], cols: Vec<Vec<Cell>>) -> Result<
         if raw.trim() != name && !raw.trim().is_empty() {
             var.label = Some(raw.trim().to_string());
         }
-        ds.add_variable(var, col).map_err(|e| SavError::Format(e.to_string()))?;
+        ds.add_variable(var, col).map_err(|e| SavError::Csv(e.to_string()))?; // names are sanitised, so this cannot fail in practice
     }
     Ok(ds)
 }
@@ -210,7 +214,7 @@ fn parse_records(text: &str, delim: char, max: Option<usize>) -> Result<Vec<Reco
         }
     }
     if in_quotes {
-        return Err(SavError::Format(format!("baris {start_line}: tanda kutip tidak ditutup")));
+        return Err(SavError::Csv(format!("baris {start_line}: tanda kutip tidak ditutup")));
     }
     if !field.is_empty() || !fields.is_empty() || quoted {
         end_field(&mut fields, &mut field, &mut quoted, true);
@@ -221,10 +225,11 @@ fn parse_records(text: &str, delim: char, max: Option<usize>) -> Result<Vec<Reco
     Ok(out)
 }
 
+/// `\0` means a single column: no delimiter at all.
 fn detect_delimiter(text: &str) -> char {
     const CANDIDATES: [char; 3] = [',', ';', '\t'];
     let mut best: Option<(usize, char)> = None;
-    let mut fallback: (usize, char) = (1, ',');
+    let mut fallback: (usize, char) = (1, '\0');
     for d in CANDIDATES {
         let Ok(recs) = parse_records(text, d, Some(20)) else { continue };
         let Some(first) = recs.first().map(|r| r.1.len()) else { continue };
@@ -260,12 +265,12 @@ pub fn import_csv(path: &Path, opt: &CsvOptions) -> Result<Dataset, SavError> {
     let delim = opt.delimiter.map_or_else(|| detect_delimiter(&text), char::from);
     let recs = parse_records(&text, delim, None)?;
     let Some((_, first)) = recs.first() else {
-        return Err(SavError::Format("file kosong".into()));
+        return Err(SavError::Csv("file kosong".into()));
     };
     let width = first.len();
     for (line, r) in &recs {
         if r.len() != width {
-            return Err(SavError::Format(format!("baris {line}: {} kolom, seharusnya {width}", r.len())));
+            return Err(SavError::Csv(format!("baris {line}: {} kolom, seharusnya {width}", r.len())));
         }
     }
     let (headers, body): (Vec<String>, &[Record]) =

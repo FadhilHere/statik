@@ -48,18 +48,18 @@ fn header_text(d: &Data) -> String {
 /// string variable; empty cells are system-missing (numeric) or empty (string).
 pub fn import_xlsx(path: &Path, sheet: Option<&str>, header: bool) -> Result<Dataset, SavError> {
     std::fs::File::open(path)?; // a missing file is an Io error, not a format error
-    let mut wb = open_workbook_auto(path).map_err(|e| SavError::Format(format!("tidak bisa membuka {}: {e}", path.display())))?;
+    let mut wb = open_workbook_auto(path).map_err(|e| SavError::Xlsx(format!("tidak bisa membuka {}: {e}", path.display())))?;
     let name = match sheet {
         Some(s) => s.to_string(),
-        None => wb.sheet_names().first().cloned().ok_or_else(|| SavError::Format("workbook tanpa sheet".into()))?,
+        None => wb.sheet_names().first().cloned().ok_or_else(|| SavError::Xlsx("workbook tanpa sheet".into()))?,
     };
     if !wb.sheet_names().contains(&name) {
-        return Err(SavError::Format(format!("sheet '{name}' tidak ditemukan")));
+        return Err(SavError::Xlsx(format!("sheet '{name}' tidak ditemukan")));
     }
-    let range = wb.worksheet_range(&name).map_err(|e| SavError::Format(format!("sheet '{name}': {e}")))?;
+    let range = wb.worksheet_range(&name).map_err(|e| SavError::Xlsx(format!("sheet '{name}': {e}")))?;
     let width = range.width();
     if width == 0 {
-        return Err(SavError::Format(format!("sheet '{name}' kosong")));
+        return Err(SavError::Xlsx(format!("sheet '{name}' kosong")));
     }
     let mut rows = range.rows();
     let headers: Vec<String> = if header {
