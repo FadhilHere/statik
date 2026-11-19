@@ -123,6 +123,18 @@ impl CsvDialog {
         }
     }
 
+    /// The options OK reads the whole file with: Auto delimiter / decimal symbol are pinned to
+    /// what the preview detected, so the preview, the logged syntax and the import agree (the
+    /// preview only sees the start of the file; a whole-file detection could decide otherwise).
+    pub fn import_options(&self) -> CsvOptions {
+        let mut opt = self.options();
+        if let Some(Ok(p)) = &self.preview {
+            opt.delimiter = opt.delimiter.or(Some(p.delimiter));
+            opt.decimal_comma = opt.decimal_comma.or(Some(p.decimal_comma));
+        }
+        opt
+    }
+
     /// Read the preview again if the options changed since it was read.
     pub fn refresh(&mut self) {
         let key = (self.header, self.delimiter, self.decimal);
@@ -464,7 +476,9 @@ impl AppState {
         }
         let rev = self.doc.rev();
         let job = match d {
-            ImportDialog::Csv(c) => csv_job(c.path.clone(), c.options(), c.syntax(), rev),
+            ImportDialog::Csv(c) => {
+                csv_job(c.path.clone(), c.import_options(), c.syntax(), rev)
+            },
             ImportDialog::Excel(x) => xlsx_job(x.path.clone(), x.sheet_name(), x.header, rev),
         };
         if self.queue_job(job) {

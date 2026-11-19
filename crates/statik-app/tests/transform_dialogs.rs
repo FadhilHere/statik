@@ -581,3 +581,44 @@ fn transform_conflicting_with_an_edit_adds_no_log() {
     assert_eq!(s.message().unwrap().title, "Data changed");
     assert!(!s.can_undo());
 }
+
+/// Auto delimiter / decimal symbol are pinned to what the preview detected: the preview only
+/// reads the start of the file (`sav_io::SNIFF_BYTES`), and a whole-file detection could decide
+/// otherwise. Here the first megabyte shows decimal points (`1.5`) with `;`, but the last line has
+/// a decimal comma (`2,5`), which would turn the whole-file Auto into decimal comma (`1.5` = 15).
+#[test]
+fn import_csv_auto_options_are_pinned_to_the_preview() {
+    let _render = common::render_lock();
+    let dir = std::env::temp_dir().join(format!("statik-csv-pin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.csv");
+    let mut text = String::from("a;b\n");
+    while text.len() <= sav_io::SNIFF_BYTES + 1000 {
+        text.push_str("1.5;2\n");
+    }
+    text.push_str("1.5;2,5\n");
+    std::fs::write(&path, &text).unwrap();
+
+    let mut h = harness(AppState::new());
+    h.state_mut().state.open_import_csv(path.clone());
+    h.run();
+    let Some(ImportDialog::Csv(d)) = &h.state().state.import else {
+        panic!("no CSV dialog")
+    };
+    let p = d.preview.as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(p.delimiter, b';');
+    assert!(!p.decimal_comma);
+    let opt = d.import_options();
+    assert_eq!(opt.delimiter, Some(b';'));
+    assert_eq!(opt.decimal_comma, Some(false));
+    let syntax = d.syntax();
+    assert!(!syntax.contains("DECIMAL COMMA"), "{syntax}");
+
+    ok_and_wait(&mut h);
+    let st = &h.state().state;
+    assert!(st.messages.is_empty(), "{:?}", st.messages);
+    assert_eq!(column(st, "a")[0], 1.5);
+    let log = &st.outputs.last().unwrap().log;
+    assert!(!log.contains("DECIMAL COMMA"), "{log}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
