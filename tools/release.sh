@@ -3,28 +3,25 @@
 #
 #   bash tools/release.sh
 #
-# Machine-local settings for this laptop: cargo home and temp on D:, and the resource compiler
-# (rc.exe, for the embedded icon) from the Visual Studio folder. Without rc.exe the build still
-# succeeds; the exe then has no embedded icon (the window icon is set at runtime anyway).
-# CARGO_BUILD_JOBS can be lowered (e.g. 2) when memory is short.
+# Optional settings (environment variables, or put them in the git-ignored
+# tools/release.local.sh, which is sourced when present):
+#   RC              full path to rc.exe (resource compiler, for the embedded icon)
+#   STATIK_VS_DIR   a Visual Studio / Windows SDK folder to search for rc.exe
+#   CARGO_HOME, TMP, TEMP, CARGO_BUILD_JOBS   usual cargo/temp settings (e.g. when C: is full
+#                   or memory is short)
+# Without rc.exe the build still succeeds; the exe then has no embedded icon (the window icon
+# is set at runtime anyway).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-export CARGO_HOME='D:\tmp\cargo-home'
-export TMP='D:\tmp\tmp'
-export TEMP='D:\tmp\tmp'
+if [ -f tools/release.local.sh ]; then
+    # shellcheck disable=SC1091
+    . tools/release.local.sh
+fi
 
-if [ -z "${RC:-}" ]; then
-    for rc in "/d/Kuliah/Magang/VisualStudio/SDK/ScopeCppSDK/vc15/SDK/bin/rc.exe"; do
-        if [ -f "$rc" ]; then
-            RC="$(cygpath -w "$rc" 2>/dev/null || echo "$rc")"
-            break
-        fi
-    done
-    if [ -z "${RC:-}" ]; then
-        RC="$(find /d/Kuliah/Magang/VisualStudio -iname rc.exe 2>/dev/null | head -n 1 || true)"
-        [ -n "$RC" ] && RC="$(cygpath -w "$RC" 2>/dev/null || echo "$RC")"
-    fi
+if [ -z "${RC:-}" ] && [ -n "${STATIK_VS_DIR:-}" ]; then
+    RC="$(find "$STATIK_VS_DIR" -iname rc.exe 2>/dev/null | head -n 1 || true)"
+    [ -n "$RC" ] && RC="$(cygpath -w "$RC" 2>/dev/null || echo "$RC")"
 fi
 if [ -n "${RC:-}" ]; then
     export RC
