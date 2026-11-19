@@ -15,9 +15,10 @@ use crate::dialogs::message::message_box;
 use crate::editor::View;
 use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
+use crate::output::{OutputAction, output_window};
 use crate::state::{AppState, Command, Message, Prepared};
 use crate::variable_view::{commit_var_edit, variable_view};
-use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand};
+use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand, ViewportId};
 use std::path::PathBuf;
 
 pub struct StatikApp {
@@ -271,8 +272,10 @@ impl StatikApp {
             });
         });
 
+        // The Output viewer (its contents are disabled while busy).
+        let mut output_action = None;
         if self.state.show_output {
-            self.output_window(&ctx, busy);
+            output_action = output_window(&ctx, &mut self.state, busy);
         }
 
         if let Some(msg) = self.state.message()
@@ -284,6 +287,9 @@ impl StatikApp {
         if let Some(a) = action {
             self.handle(a, &ctx);
         }
+        if let Some(a) = output_action {
+            self.handle_output(a, &ctx);
+        }
         if self.state.exit_requested {
             // One close request per Exit; a cancelled close (Task 7) leaves the app running.
             ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -291,33 +297,34 @@ impl StatikApp {
         }
     }
 
-    /// Minimal output list until the Output viewer (Task 4). Its contents are disabled while
-    /// `busy`; the Task 4 viewport must keep that gate.
-    fn output_window(&mut self, ctx: &Context, busy: bool) {
-        let mut open = true;
-        egui::Window::new("Output")
-            .open(&mut open)
-            .default_size([480.0, 360.0])
-            .show(ctx, |ui| {
-                ui.add_enabled_ui(!busy, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for e in &self.state.outputs {
-                            ui.strong(&e.title);
-                            if !e.log.is_empty() {
-                                ui.monospace(&e.log);
-                            }
-                            for it in &e.items {
-                                if let output_model::OutputItem::Warning(w) = it {
-                                    ui.label(format!("Warning: {w}"));
-                                }
-                            }
-                            ui.separator();
-                        }
-                    });
-                });
-            });
-        if !open {
-            self.state.show_output = false;
+    /// Act on a choice from the Output window's menus.
+    pub fn handle_output(&mut self, action: OutputAction, ctx: &Context) {
+        match action {
+            OutputAction::SaveOutput => {
+                let d = rfd::FileDialog::new()
+                    .set_title("Save Output As")
+                    .add_filter("Statik Output (*.stko)", &["stko"])
+                    .set_file_name("Output1.stko");
+                if let Some(p) = d.save_file()
+                    && let Err(e) = self.state.save_output(&p)
+                {
+                    self.state.push_message(Message::error(e));
+                }
+            }
+            OutputAction::OpenOutput => {
+                let d = rfd::FileDialog::new()
+                    .set_title("Open Output")
+                    .add_filter("Statik Output (*.stko)", &["stko"]);
+                if let Some(p) = d.pick_file()
+                    && let Err(e) = self.state.open_output(&p)
+                {
+                    self.state.push_message(Message::error(e));
+                }
+            }
+            OutputAction::ShowDataEditor => {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus)
+            }
+            OutputAction::About => self.handle(MenuAction::About, ctx),
         }
     }
 }

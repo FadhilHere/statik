@@ -112,12 +112,12 @@ fn depth(nodes: &[HeaderNode]) -> usize {
 }
 
 /// Number of leaf columns/rows.
-pub(crate) fn leaf_count(nodes: &[HeaderNode]) -> usize {
+pub fn leaf_count(nodes: &[HeaderNode]) -> usize {
     nodes.iter().map(leaves).sum()
 }
 
 /// One header cell placed on a grid: level (row), starting leaf column, spans.
-pub(crate) struct HeaderCell {
+pub struct HeaderCell {
     pub label: String,
     pub footnotes: Vec<char>,
     pub level: usize,
@@ -127,12 +127,12 @@ pub(crate) struct HeaderCell {
 }
 
 /// Total number of header levels.
-pub(crate) fn header_depth(nodes: &[HeaderNode]) -> usize {
+pub fn header_depth(nodes: &[HeaderNode]) -> usize {
     depth(nodes)
 }
 
 /// Lay header nodes out on a grid (leaves span down to the bottom level).
-pub(crate) fn header_cells(nodes: &[HeaderNode]) -> Vec<HeaderCell> {
+pub fn header_cells(nodes: &[HeaderNode]) -> Vec<HeaderCell> {
     fn walk(n: &HeaderNode, level: usize, col: usize, total: usize, out: &mut Vec<HeaderCell>) {
         let rowspan = if n.children.is_empty() { total - level } else { 1 };
         out.push(HeaderCell { label: n.label.clone(), footnotes: n.footnotes.clone(), level, col, colspan: leaves(n), rowspan });
@@ -153,10 +153,10 @@ pub(crate) fn header_cells(nodes: &[HeaderNode]) -> Vec<HeaderCell> {
 }
 
 /// A header label with its footnote markers.
-pub(crate) type Label = (String, Vec<char>);
+pub type Label = (String, Vec<char>);
 
 /// Path of labels (root..leaf) for each leaf.
-pub(crate) fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<Label>> {
+pub fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<Label>> {
     fn walk(n: &HeaderNode, prefix: &mut Vec<Label>, out: &mut Vec<Vec<Label>>) {
         prefix.push((n.label.clone(), n.footnotes.clone()));
         if n.children.is_empty() {
@@ -176,9 +176,52 @@ pub(crate) fn leaf_paths(nodes: &[HeaderNode]) -> Vec<Vec<Label>> {
 }
 
 /// Row-header label to show at depth `d` of row `ri` (blank when it repeats the row above).
-pub(crate) fn row_label(paths: &[Vec<Label>], ri: usize, d: usize) -> Label {
+pub fn row_label(paths: &[Vec<Label>], ri: usize, d: usize) -> Label {
     let Some(p) = paths.get(ri) else { return Label::default() };
     let Some(l) = p.get(d) else { return Label::default() };
     let repeat = d + 1 < p.len() && ri > 0 && paths[ri - 1].len() > d && paths[ri - 1][..=d] == p[..=d];
     if repeat { Label::default() } else { l.clone() }
+}
+
+/// One row-header cell placed on the row-header grid: first data row, depth (column), spans.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowHeaderCell {
+    pub label: String,
+    pub footnotes: Vec<char>,
+    pub row: usize,
+    pub depth: usize,
+    /// Rows covered: a group label spans the rows of its children (SPSS "Model 1").
+    pub rowspan: usize,
+    /// Columns covered: the last label of a path shorter than the deepest one spans the rest.
+    pub colspan: usize,
+}
+
+/// Lay the row headers out: returns the number of row-header columns (at least 1) and the
+/// non-blank cells. A label repeated on the rows below (see [`row_label`]) spans them.
+pub fn row_header_cells(nodes: &[HeaderNode]) -> (usize, Vec<RowHeaderCell>) {
+    let paths = leaf_paths(nodes);
+    let depth = paths.iter().map(|p| p.len()).max().unwrap_or(1).max(1);
+    let mut out = vec![];
+    for (ri, p) in paths.iter().enumerate() {
+        for d in 0..p.len() {
+            let (label, footnotes) = row_label(&paths, ri, d);
+            let repeated = d + 1 < p.len() && ri > 0 && paths[ri - 1].len() > d && paths[ri - 1][..=d] == p[..=d];
+            if repeated {
+                continue;
+            }
+            let mut rowspan = 1;
+            if d + 1 < p.len() {
+                while let Some(q) = paths.get(ri + rowspan) {
+                    if d + 1 < q.len() && q.len() > d && q[..=d] == p[..=d] {
+                        rowspan += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            let colspan = if d + 1 == p.len() { depth - d } else { 1 };
+            out.push(RowHeaderCell { label, footnotes, row: ri, depth: d, rowspan, colspan });
+        }
+    }
+    (depth, out)
 }

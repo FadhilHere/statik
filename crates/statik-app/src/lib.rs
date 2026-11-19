@@ -8,6 +8,7 @@ pub mod editor;
 pub mod icon;
 pub mod jobs;
 pub mod menu;
+pub mod output;
 pub mod state;
 pub mod variable_view;
 

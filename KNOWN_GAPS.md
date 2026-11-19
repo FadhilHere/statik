@@ -109,3 +109,13 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **Number display:** values are formatted with the variable's decimals; a number too wide for its column is shown in E notation (`1.00E10`), else as asterisks. Date/time/currency formats kept from `.sav` files are shown as plain numbers (the Type column names the format: Date, Time, Comma, Dollar, ...). The Variable Type dialog only offers Numeric and String.
 - **Undo** holds the last 100 edits. New/Open clear it, and a procedure that changes the data (saved variables; later Compute/Recode) clears it as well.
 - The Measure, Align and Role icons are Statik's own drawings.
+
+## Output viewer, charts, copy (Plan 3 Task 4)
+
+- **One output document.** The viewer is always "Output1 [Document1]". File ▸ Open Output appends the opened `.stko` entries to the current output (nothing on screen is lost) instead of opening a second viewer. `.stko` is Statik's own JSON (`Vec<OutputEntry>`); `.spv` files are not read or written. Export..., Print, Delete/Hide item, editing pivot tables (pivoting, cell edits, TableLooks) are not available.
+- **Bold text** (procedure headings, table and chart titles) is faux bold (drawn twice, one pixel apart): the bundled egui fonts have no bold face. Fonts are egui's default sans-serif, not Arial.
+- **Histogram legend:** "Mean = …" uses 2 decimals and "Std. Dev. = …" 3, with a leading zero (`0.983`). SPSS prints a residual mean of about zero in E notation (`Mean = 4.44E-16`); Statik prints `Mean = 0.00`. Bins are Statik's own (about √N bins of a "nice" width), so bar counts can differ from SPSS's binning.
+- **Axis captions** come from fixed text where the chart model has none: Histogram y "Frequency" (no x caption), P-P "Observed Cum Prob" / "Expected Cum Prob", Q-Q "Observed Value" / "Expected Normal". Axis tick spacing is egui_plot's. Charts cannot be edited (no Chart Editor).
+- **Copy (tables)** puts "HTML Format" (inline-styled table: dark rules above the header and below the last row, light rules elsewhere, title as the first row), "Rich Text Format" (simple RTF table with merged spanning cells) and tab-separated text on the clipboard. Word pastes the HTML. Column widths in the RTF are estimated from character counts.
+- **Copy as Image** captures the viewer window (`ViewportCommand::Screenshot`) and crops it to the item: only the part of the item visible in the window is copied (a table taller than the window is cut off), at screen resolution, as CF_DIB (no PNG/EMF). Copy of a chart is always an image.
+- The viewer's Window menu has only "Data Editor"; the Data Editor's Window ▸ Output shows/hides the viewer. The embedded fallback (backends without multiple windows, i.e. tests) has no close button.

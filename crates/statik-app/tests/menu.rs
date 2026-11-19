@@ -80,7 +80,9 @@ fn queued_job_is_started_by_the_app_and_gates_the_ui() {
     h.run();
     assert!(h.state().busy().is_none());
     assert_eq!(h.state().state.outputs.last().unwrap().title, "Slow");
-    assert!(!h.get_by_label("File").accesskit_node().is_disabled());
+    // The output window (with its own File menu) is open now; the Data Editor's comes first.
+    let file = h.get_all_by_label("File").next().unwrap();
+    assert!(!file.accesskit_node().is_disabled());
 }
 
 #[test]

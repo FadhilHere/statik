@@ -21,6 +21,11 @@ egui = "0.35"
 egui_extras = "0.35"
 rfd = "0.18"
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+egui_plot = "0.36"
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5"
 
 [dev-dependencies]
 egui_kittest = { version = "0.35", features = ["wgpu", "snapshot"] }

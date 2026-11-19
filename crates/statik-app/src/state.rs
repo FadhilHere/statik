@@ -15,6 +15,7 @@
 use crate::edit::EditOp;
 use crate::editor::EditorState;
 use crate::jobs::{Job, JobResult, SaveKind};
+use crate::output::{ItemRef, OutputView};
 use dataset::Dataset;
 use output_model::OutputItem;
 use sav_io::CsvOptions;
@@ -250,6 +251,8 @@ pub struct AppState {
     pub(crate) undo_stack: Vec<EditOp>,
     /// Undone edits, most recently undone last.
     pub(crate) redo_stack: Vec<EditOp>,
+    /// UI state of the Output viewer (selection, scroll target, pending image copy).
+    pub viewer: OutputView,
 }
 
 impl Default for AppState {
@@ -286,7 +289,49 @@ impl AppState {
             editor: EditorState::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            viewer: OutputView::default(),
         }
+    }
+
+    /// File ▸ Save Output As in the viewer: all output entries as JSON (`.stko`, added when
+    /// the path has another or no extension). Written to a temporary file, then renamed.
+    /// Returns the path written.
+    pub fn save_output(&self, path: &Path) -> Result<PathBuf, String> {
+        let path = if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("stko"))
+        {
+            path.to_path_buf()
+        } else {
+            let mut p = path.as_os_str().to_owned();
+            p.push(".stko");
+            PathBuf::from(p)
+        };
+        let json = serde_json::to_vec(&self.outputs)
+            .map_err(|e| format!("Cannot save the output: {e}"))?;
+        let tmp = path.with_extension("stko.tmp");
+        std::fs::write(&tmp, json)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("Cannot write {}: {e}", path.display())
+            })?;
+        Ok(path)
+    }
+
+    /// File ▸ Open Output in the viewer: read a `.stko` file and append its entries (the
+    /// output already shown is kept), show the viewer and scroll to the first opened entry.
+    pub fn open_output(&mut self, path: &Path) -> Result<(), String> {
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+        let entries: Vec<OutputEntry> = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("{} is not a Statik output file: {e}", path.display()))?;
+        let first = self.outputs.len();
+        self.outputs.extend(entries);
+        self.show_output = true;
+        self.viewer.scroll_to = Some(ItemRef::entry(first));
+        self.viewer.selected = None;
+        Ok(())
     }
 
     /// Window title: `"basic.sav [DataSet1] - Statik Data Editor"`, `"Untitled1 [DataSet0] - ..."`,
