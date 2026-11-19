@@ -3,22 +3,64 @@
 //! Every user action is a [`Command`]. [`AppState::prepare`] either applies a command at once or,
 //! for long-running work (open, import, save), returns a [`Job`] to run on a worker thread; the
 //! job's [`JobResult`] is applied with [`AppState::finish`]. [`AppState::apply`] does both
-//! synchronously (tests, scripted use).
-use crate::jobs::{Job, JobResult};
+//! synchronously (tests, scripted use). Code that only has `&mut AppState` (views, dialogs)
+//! starts work with [`AppState::queue_job`].
+//!
+//! **Revision guard.** Every change to the document's data goes through [`Doc::ds_mut`] /
+//! [`AppState::touch`], which bump [`Doc::rev`] and set dirty; replacing the document (New,
+//! Open) also moves `rev` on. A job records the revision it started from, and
+//! [`AppState::finish`] only swaps data in, replaces the document or clears `dirty` if the
+//! revision is unchanged. Otherwise the newer in-memory state is kept and a conflict message is
+//! queued.
+use crate::jobs::{Job, JobResult, SaveKind};
 use dataset::Dataset;
 use output_model::OutputItem;
 use sav_io::CsvOptions;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-/// The open data document.
+/// The open data document. The data is only reachable mutably through [`Doc::ds_mut`], which
+/// bumps the revision and marks the document dirty.
 #[derive(Debug, Default)]
 pub struct Doc {
-    pub ds: Dataset,
+    ds: Dataset,
     /// The file the data came from (a `.sav`, or an imported CSV/XLSX file); `None` for a new
     /// document. Only a `.sav` path can be saved to directly.
     pub path: Option<PathBuf>,
+    dirty: bool,
+    rev: u64,
+}
+
+impl Doc {
+    pub fn new(ds: Dataset, path: Option<PathBuf>) -> Self {
+        Doc {
+            ds,
+            path,
+            dirty: false,
+            rev: 0,
+        }
+    }
+    pub fn ds(&self) -> &Dataset {
+        &self.ds
+    }
+    /// Mutable access to the data: bumps [`Self::rev`] and sets dirty. Use it for every edit.
+    pub fn ds_mut(&mut self) -> &mut Dataset {
+        self.touch();
+        &mut self.ds
+    }
+    /// Record a change (bump the revision, mark dirty).
+    pub fn touch(&mut self) {
+        self.rev += 1;
+        self.dirty = true;
+    }
     /// Changed since it was opened or last saved.
-    pub dirty: bool,
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+    /// Revision counter; changes with every mutation and every document replacement.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
 }
 
 /// One run in the output document: a procedure, or a log of an open/save.
@@ -144,6 +186,31 @@ pub enum Prepared {
     Job(Job),
 }
 
+/// What a procedure closure returns: its output, and whether it changed the data.
+#[derive(Debug, Default)]
+pub struct ProcOutput {
+    pub items: Vec<OutputItem>,
+    /// True when the procedure changed the dataset (saved variables); compute/recode say true.
+    pub changed: bool,
+}
+
+impl ProcOutput {
+    /// Output only; the data is unchanged.
+    pub fn output(items: Vec<OutputItem>) -> Self {
+        ProcOutput {
+            items,
+            changed: false,
+        }
+    }
+    /// Output, and the data was changed.
+    pub fn changed(items: Vec<OutputItem>) -> Self {
+        ProcOutput {
+            items,
+            changed: true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub doc: Doc,
@@ -152,10 +219,15 @@ pub struct AppState {
     pub show_output: bool,
     /// View > Value Labels is on.
     pub value_labels: bool,
-    /// Modal message waiting to be shown (and dismissed) by the UI.
-    pub message: Option<Message>,
-    /// File > Exit was chosen; the UI closes the window.
+    /// Modal messages waiting to be shown by the UI, one at a time, oldest first
+    /// ([`Self::push_message`], [`Self::message`], [`Self::dismiss_message`]).
+    pub messages: VecDeque<Message>,
+    /// File > Exit was chosen; the UI sends a close request to the window and then resets this.
+    /// Call [`Self::cancel_exit`] if a close is cancelled (e.g. at "Save changes?", Task 7).
     pub exit_requested: bool,
+    /// A job queued by code that only has `&mut AppState` (views, dialogs); see
+    /// [`Self::queue_job`]. `StatikApp` starts it on the next frame; until then the app is busy.
+    pub pending_job: Option<Job>,
     /// "DataSetN" number of the current document (SPSS starts at 0 for the empty startup
     /// document and counts up for every document opened or created).
     pub dataset_no: usize,
@@ -190,8 +262,9 @@ impl AppState {
             outputs: Vec::new(),
             show_output: false,
             value_labels: false,
-            message: None,
+            messages: VecDeque::new(),
             exit_requested: false,
+            pending_job: None,
             dataset_no: 0,
             untitled_no: 1,
             next_dataset_no: 1,
@@ -221,6 +294,49 @@ impl AppState {
         !self.doc.path.as_deref().is_some_and(is_sav)
     }
 
+    /// Queue a modal message (shown after the ones already queued).
+    pub fn push_message(&mut self, m: Message) {
+        self.messages.push_back(m);
+    }
+    /// The message currently shown, if any.
+    pub fn message(&self) -> Option<&Message> {
+        self.messages.front()
+    }
+    /// Close the current message; the next queued one is shown.
+    pub fn dismiss_message(&mut self) {
+        self.messages.pop_front();
+    }
+
+    /// Record a change to the document's data (same as `doc.touch()`).
+    pub fn touch(&mut self) {
+        self.doc.touch();
+    }
+
+    /// Replace the document; the revision moves on, so jobs started on the old one conflict.
+    fn replace_doc(&mut self, mut doc: Doc) {
+        doc.rev = self.doc.rev + 1;
+        self.doc = doc;
+    }
+
+    /// Queue a job for `StatikApp` to start on the next frame (for code that only has
+    /// `&mut AppState`). Returns false, and queues an error message, if one is already queued.
+    /// Tests must call `StatikApp::wait_for_job` before asserting on its results.
+    pub fn queue_job(&mut self, job: Job) -> bool {
+        if self.pending_job.is_some() {
+            self.push_message(Message::error(
+                "Another operation is already waiting to run.",
+            ));
+            return false;
+        }
+        self.pending_job = Some(job);
+        true
+    }
+
+    /// The window close was cancelled (e.g. at a "Save changes?" prompt).
+    pub fn cancel_exit(&mut self) {
+        self.exit_requested = false;
+    }
+
     pub fn can_undo(&self) -> bool {
         false
     }
@@ -239,9 +355,10 @@ impl AppState {
     /// Apply a quick command now, or package a long-running one as a [`Job`].
     pub fn prepare(&mut self, cmd: Command) -> Prepared {
         use Prepared::Done;
+        let rev = self.doc.rev;
         match cmd {
             Command::New => {
-                self.doc = Doc::default();
+                self.replace_doc(Doc::default());
                 self.dataset_no = self.take_dataset_no();
                 self.untitled_no = self.next_untitled_no;
                 self.next_untitled_no += 1;
@@ -262,6 +379,7 @@ impl AppState {
                                 path,
                                 notes: report.notes,
                                 log,
+                                rev,
                             }
                         }
                         Err(e) => {
@@ -280,6 +398,7 @@ impl AppState {
                             path,
                             notes: Vec::new(),
                             log,
+                            rev,
                         }
                     }
                     Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
@@ -299,13 +418,14 @@ impl AppState {
                             path,
                             notes: Vec::new(),
                             log,
+                            rev,
                         }
                     }
                     Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
                 },
             )),
             Command::Save => match &self.doc.path {
-                Some(p) if is_sav(p) => Prepared::Job(self.save_job(p.clone())),
+                Some(p) if is_sav(p) => Prepared::Job(self.save_job(p.clone(), SaveKind::User)),
                 _ => Done(Err(
                     "This data has not been saved as a .sav file yet. Use Save As...".into(),
                 )),
@@ -316,7 +436,7 @@ impl AppState {
                     s.push(".sav");
                     path = PathBuf::from(s);
                 }
-                Prepared::Job(self.save_job(path))
+                Prepared::Job(self.save_job(path, SaveKind::User))
             }
             Command::Undo | Command::Redo => Done(Ok(())),
             Command::ToggleValueLabels => {
@@ -336,7 +456,7 @@ impl AppState {
                 Done(Ok(()))
             }
             Command::OpenDialog(kind) => {
-                self.message = Some(Message::info(
+                self.push_message(Message::info(
                     kind.title(),
                     format!("{} is not available yet.", kind.title()),
                 ));
@@ -352,38 +472,47 @@ impl AppState {
     }
 
     /// Write a clone of the current dataset to `path` (atomic, via `sav_io::write_sav`).
-    fn save_job(&self, path: PathBuf) -> Job {
+    /// A [`SaveKind::Autosave`] result never changes the document's path, dirty flag or output.
+    pub fn save_job(&self, path: PathBuf, kind: SaveKind) -> Job {
         let ds = self.doc.ds.clone();
-        Job::new("Saving data file...", move || {
-            match sav_io::write_sav(&ds, &path) {
-                Ok(()) => {
-                    let log = format!("SAVE OUTFILE={}\n  /COMPRESSED.", quoted(&path));
-                    JobResult::Saved { path, log }
+        let rev = self.doc.rev;
+        let label = match kind {
+            SaveKind::User => "Saving data file...",
+            SaveKind::Autosave => "Autosaving...",
+        };
+        Job::new(label, move || match sav_io::write_sav(&ds, &path) {
+            Ok(()) => {
+                let log = format!("SAVE OUTFILE={}\n  /COMPRESSED.", quoted(&path));
+                JobResult::Saved {
+                    path,
+                    log,
+                    rev,
+                    kind,
                 }
-                Err(e) => JobResult::Failed(format!("Cannot save {}:\n{e}", path.display())),
             }
+            Err(e) => JobResult::Failed(format!("Cannot save {}:\n{e}", path.display())),
         })
     }
 
-    /// A job running procedure `f` on a clone of the dataset (see [`crate::jobs`]). The result is
-    /// one output entry; if `f` added or removed variables or cases the clone replaces the
-    /// document's dataset. (Procedures only ever add variables, e.g. saved residuals, so the
-    /// shape check is enough to detect a change.)
+    /// A job running procedure `f` on a clone of the dataset (see [`crate::jobs`]). `f` returns
+    /// its output and whether it changed the data ([`ProcOutput::changed`], e.g. saved
+    /// residuals). A changed clone replaces the document's dataset when the job finishes, unless
+    /// the data was edited meanwhile (then the edit is kept and a conflict message is queued).
     pub fn procedure_job(
         &self,
         title: &str,
-        f: impl FnOnce(&mut Dataset) -> Vec<OutputItem> + Send + 'static,
+        f: impl FnOnce(&mut Dataset) -> ProcOutput + Send + 'static,
         syntax: String,
     ) -> Job {
         let mut ds = self.doc.ds.clone();
+        let rev = self.doc.rev;
         let title = title.to_string();
         Job::new(format!("Running {title}..."), move || {
-            let shape = (ds.n_vars(), ds.n_cases());
-            let items = f(&mut ds);
-            let changed = (ds.n_vars(), ds.n_cases()) != shape;
+            let ProcOutput { items, changed } = f(&mut ds);
             JobResult::Ran {
                 ds,
                 changed,
+                rev,
                 entry: OutputEntry {
                     title,
                     items,
@@ -394,6 +523,8 @@ impl AppState {
     }
 
     /// Apply the result of a finished job. Errors are returned (the UI shows them as a message).
+    /// A conflict with edits made while the job ran keeps the newer in-memory state and queues a
+    /// "Data changed" warning.
     pub fn finish(&mut self, r: JobResult) -> Result<(), String> {
         match r {
             JobResult::Loaded {
@@ -401,12 +532,20 @@ impl AppState {
                 path,
                 notes,
                 log,
+                rev,
             } => {
-                self.doc = Doc {
-                    ds,
-                    path: Some(path),
-                    dirty: false,
-                };
+                if rev != self.doc.rev {
+                    self.push_message(Message::warning(
+                        "Data changed",
+                        format!(
+                            "The data was changed while {} was being read, so it was not \
+                             opened. Save your changes and open the file again.",
+                            path.display()
+                        ),
+                    ));
+                    return Ok(());
+                }
+                self.replace_doc(Doc::new(ds, Some(path)));
                 self.dataset_no = self.take_dataset_no();
                 let log = format!(
                     "{log}\nDATASET NAME DataSet{} WINDOW=FRONT.",
@@ -424,13 +563,33 @@ impl AppState {
                         .map(|n| format!("- {n}"))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    self.message = Some(Message::warning("Warning", text));
+                    self.push_message(Message::warning("Warning", text));
                 }
                 Ok(())
             }
-            JobResult::Saved { path, log } => {
+            JobResult::Saved {
+                kind: SaveKind::Autosave,
+                ..
+            } => Ok(()),
+            JobResult::Saved {
+                path,
+                log,
+                rev,
+                kind: SaveKind::User,
+            } => {
+                if rev == self.doc.rev {
+                    self.doc.dirty = false;
+                } else {
+                    self.push_message(Message::warning(
+                        "Data changed",
+                        format!(
+                            "The data was changed while it was being saved. {} holds the data \
+                             as it was when saving started; save again to keep the newer changes.",
+                            path.display()
+                        ),
+                    ));
+                }
                 self.doc.path = Some(path);
-                self.doc.dirty = false;
                 self.outputs.push(OutputEntry {
                     title: "Log".into(),
                     items: Vec::new(),
@@ -438,10 +597,26 @@ impl AppState {
                 });
                 Ok(())
             }
-            JobResult::Ran { ds, changed, entry } => {
+            JobResult::Ran {
+                ds,
+                changed,
+                rev,
+                entry,
+            } => {
                 if changed {
-                    self.doc.ds = ds;
-                    self.doc.dirty = true;
+                    if rev == self.doc.rev {
+                        self.doc.ds = ds;
+                        self.doc.touch();
+                    } else {
+                        self.push_message(Message::warning(
+                            "Data changed",
+                            format!(
+                                "The data was edited while {} was running. Its output is shown, \
+                                 but its changes to the data were not applied; run it again.",
+                                entry.title
+                            ),
+                        ));
+                    }
                 }
                 self.outputs.push(entry);
                 self.show_output = true;
@@ -457,11 +632,11 @@ impl AppState {
 pub fn run_procedure(
     state: &mut AppState,
     title: &str,
-    f: impl FnOnce(&mut Dataset) -> Vec<OutputItem> + Send + 'static,
+    f: impl FnOnce(&mut Dataset) -> ProcOutput + Send + 'static,
     syntax: String,
 ) {
     let r = state.procedure_job(title, f, syntax).run_inline();
     if let Err(e) = state.finish(r) {
-        state.message = Some(Message::error(e));
+        state.push_message(Message::error(e));
     }
 }

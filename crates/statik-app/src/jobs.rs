@@ -10,13 +10,14 @@
 //! A job that needs the data gets a clone taken when it is created (see
 //! [`crate::state::AppState::procedure_job`]); a job that changes the data (a procedure saving
 //! variables, compute, recode) returns the changed dataset in [`JobResult::Ran`] and `finish`
-//! swaps it in. While a job runs the UI blocks every other command ([`crate::app::StatikApp`]
-//! disables the menus and ignores shortcuts), so the swapped-in dataset cannot overwrite edits made
-//! in the meantime. If the job fails or panics the document is left exactly as it was.
+//! swaps it in. Every result carries the document revision the job started from, and
+//! `finish` refuses to overwrite newer edits (see "Revision guard" in [`crate::state`]). On top
+//! of that, while a job runs the UI blocks other commands and greys out the menus and the main
+//! area ([`crate::app::StatikApp`]). If the job fails or panics the document is left as it was.
 //!
-//! A panic inside the closure is caught (debug builds) and reported as an error message. Release
-//! builds use `panic = "abort"`, where a panic still ends the process (after the crash hook in
-//! `main.rs` has written its note).
+//! A panic inside the closure is caught (`catch_unwind`; the release profile uses
+//! `panic = "unwind"`) and reported as an error message. Stack overflow and out-of-memory still
+//! abort the process.
 use crate::state::OutputEntry;
 use dataset::Dataset;
 use std::path::PathBuf;
@@ -25,7 +26,21 @@ use std::sync::mpsc;
 /// Stack size of worker threads.
 pub const WORKER_STACK: usize = 16 << 20;
 
-/// What a finished job hands back to the UI thread.
+/// Name of worker threads (the crash hook in `main.rs` skips panics on them: they are caught).
+pub const WORKER_NAME: &str = "statik-job";
+
+/// Who asked for a save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveKind {
+    /// File > Save / Save As...: sets the document's path and clears dirty (if unchanged since).
+    User,
+    /// Background autosave (Task 7): never touches the document's path, dirty flag or output.
+    Autosave,
+}
+
+/// What a finished job hands back to the UI thread. `rev` is the document revision
+/// ([`crate::state::Doc::rev`]) the job started from; `finish` uses it to detect edits made
+/// while the job ran.
 #[derive(Debug)]
 pub enum JobResult {
     /// A data file was opened or imported. `notes` are the reader's warnings (`ReadReport`),
@@ -35,14 +50,21 @@ pub enum JobResult {
         path: PathBuf,
         notes: Vec<String>,
         log: String,
+        rev: u64,
     },
-    /// The dataset was written to `path`.
-    Saved { path: PathBuf, log: String },
+    /// The dataset (as of `rev`) was written to `path`.
+    Saved {
+        path: PathBuf,
+        log: String,
+        rev: u64,
+        kind: SaveKind,
+    },
     /// A procedure (or transformation) ran on a clone of the dataset. `ds` is that clone after the
     /// run; `changed` says whether it must replace the document's dataset (and mark it dirty).
     Ran {
         ds: Dataset,
         changed: bool,
+        rev: u64,
         entry: OutputEntry,
     },
     /// The job failed; the message is shown to the user.
@@ -111,7 +133,7 @@ impl RunningJob {
         let (tx, rx) = mpsc::channel();
         let work = job.work;
         std::thread::Builder::new()
-            .name("statik-job".into())
+            .name(WORKER_NAME.into())
             .stack_size(WORKER_STACK)
             .spawn(move || {
                 let r = guarded(work);

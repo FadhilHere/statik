@@ -8,4 +8,7 @@ pub mod menu;
 pub mod state;
 
 pub use app::StatikApp;
-pub use state::{AppState, Command, DialogKind, Doc, Message, OutputEntry, run_procedure};
+pub use jobs::SaveKind;
+pub use state::{
+    AppState, Command, DialogKind, Doc, Message, OutputEntry, ProcOutput, run_procedure,
+};

@@ -100,75 +100,84 @@ fn dialog(ui: &mut Ui, label: &str, kind: DialogKind, out: &mut Option<MenuActio
 }
 
 /// Draw the menu bar. `enabled` is false while a job runs (every menu is greyed out).
+/// The top-level menus are exactly [`TOP_MENUS`], in that order.
 pub fn menu_bar(ui: &mut Ui, state: &AppState, enabled: bool) -> Option<MenuAction> {
     let mut out = None;
     egui::MenuBar::new().ui(ui, |ui| {
         ui.add_enabled_ui(enabled, |ui| {
-            ui.menu_button("File", |ui| file_menu(ui, &mut out));
-            ui.menu_button("Edit", |ui| edit_menu(ui, state, &mut out));
-            ui.menu_button("View", |ui| view_menu(ui, state, &mut out));
-            ui.menu_button("Data", data_menu);
-            ui.menu_button("Transform", |ui| transform_menu(ui, &mut out));
-            ui.menu_button("Analyze", |ui| analyze_menu(ui, &mut out));
-            ui.menu_button("Graphs", |ui| {
-                off(ui, &["Chart Builder...", "Graphboard Template Chooser..."]);
-                ui.separator();
-                sub_off(ui, &["Legacy Dialogs"]);
-            });
-            ui.menu_button("Utilities", |ui| {
-                off(
-                    ui,
-                    &[
-                        "Variables...",
-                        "OMS Control Panel...",
-                        "OMS Identifiers...",
-                        "Scoring Wizard",
-                    ],
-                );
-                ui.separator();
-                off(
-                    ui,
-                    &[
-                        "Data File Comments...",
-                        "Define Variable Sets...",
-                        "Use Variable Sets...",
-                    ],
-                );
-                ui.separator();
-                off(ui, &["Run Script..."]);
-            });
-            ui.menu_button("Extensions", |ui| {
-                off(
-                    ui,
-                    &["Extension Hub...", "Install Local Extension Bundle..."],
-                );
-                ui.separator();
-                off(ui, &["Custom Dialogs", "Utilities"]);
-            });
-            ui.menu_button("Window", |ui| {
-                off(ui, &["Split", "Minimize All Windows"]);
-                ui.separator();
-                item(ui, "Data Editor", None, &mut out, || {
-                    MenuAction::ShowDataEditor
-                });
-                let mut shown = state.show_output;
-                if ui.checkbox(&mut shown, "Output").clicked() {
-                    out = Some(MenuAction::Cmd(if shown {
-                        Command::ShowOutput
-                    } else {
-                        Command::HideOutput
-                    }));
-                    ui.close();
-                }
-            });
-            ui.menu_button("Help", |ui| {
-                off(ui, &["Topics", "Tutorial", "Command Syntax Reference"]);
-                ui.separator();
-                item(ui, "About Statik", None, &mut out, || MenuAction::About);
-            });
+            for name in TOP_MENUS {
+                ui.menu_button(name, |ui| top_menu(ui, name, state, &mut out));
+            }
         });
     });
     out
+}
+
+/// Contents of the top-level menu `name` (one of [`TOP_MENUS`]).
+fn top_menu(ui: &mut Ui, name: &str, state: &AppState, out: &mut Option<MenuAction>) {
+    match name {
+        "File" => file_menu(ui, out),
+        "Edit" => edit_menu(ui, state, out),
+        "View" => view_menu(ui, state, out),
+        "Data" => data_menu(ui),
+        "Transform" => transform_menu(ui, out),
+        "Analyze" => analyze_menu(ui, out),
+        "Graphs" => {
+            off(ui, &["Chart Builder...", "Graphboard Template Chooser..."]);
+            ui.separator();
+            sub_off(ui, &["Legacy Dialogs"]);
+        }
+        "Utilities" => {
+            off(
+                ui,
+                &[
+                    "Variables...",
+                    "OMS Control Panel...",
+                    "OMS Identifiers...",
+                    "Scoring Wizard",
+                ],
+            );
+            ui.separator();
+            off(
+                ui,
+                &[
+                    "Data File Comments...",
+                    "Define Variable Sets...",
+                    "Use Variable Sets...",
+                ],
+            );
+            ui.separator();
+            off(ui, &["Run Script..."]);
+        }
+        "Extensions" => {
+            off(
+                ui,
+                &["Extension Hub...", "Install Local Extension Bundle..."],
+            );
+            ui.separator();
+            off(ui, &["Custom Dialogs", "Utilities"]);
+        }
+        "Window" => {
+            off(ui, &["Split", "Minimize All Windows"]);
+            ui.separator();
+            item(ui, "Data Editor", None, out, || MenuAction::ShowDataEditor);
+            let mut shown = state.show_output;
+            if ui.checkbox(&mut shown, "Output").clicked() {
+                *out = Some(MenuAction::Cmd(if shown {
+                    Command::ShowOutput
+                } else {
+                    Command::HideOutput
+                }));
+                ui.close();
+            }
+        }
+        "Help" => {
+            off(ui, &["Topics", "Tutorial", "Command Syntax Reference"]);
+            ui.separator();
+            item(ui, "About Statik", None, out, || MenuAction::About);
+        }
+        _ => unreachable!("unknown top-level menu {name}"),
+    }
 }
 
 fn file_menu(ui: &mut Ui, out: &mut Option<MenuAction>) {

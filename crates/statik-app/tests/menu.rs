@@ -11,6 +11,83 @@ fn harness() -> Harness<'static, StatikApp> {
         .build_ui_state(|ui, app: &mut StatikApp| app.show(ui), StatikApp::default())
 }
 
+/// Labels of all buttons on screen, in tree order.
+fn button_labels(h: &Harness<'_, StatikApp>) -> Vec<String> {
+    h.root()
+        .children_recursive()
+        .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+        .filter_map(|n| n.accesskit_node().label())
+        .collect()
+}
+
+#[test]
+fn rendered_menu_bar_is_exactly_the_spss_menus() {
+    // With no menu open, the only buttons on screen are the top-level menus: exactly these 11.
+    let h = harness();
+    assert_eq!(
+        button_labels(&h),
+        [
+            "File",
+            "Edit",
+            "View",
+            "Data",
+            "Transform",
+            "Analyze",
+            "Graphs",
+            "Utilities",
+            "Extensions",
+            "Window",
+            "Help"
+        ]
+    );
+}
+
+#[test]
+fn queued_job_is_started_by_the_app_and_gates_the_ui() {
+    let mut h = harness();
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/data/skripsi60.csv");
+    h.state_mut()
+        .state
+        .apply(statik_app::Command::Open(p))
+        .unwrap();
+    // A view with only `&mut AppState` queues a job; a barrier keeps it running while we look.
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let job = h.state().state.procedure_job(
+        "Slow",
+        move |_| {
+            let _ = rx.recv();
+            statik_app::ProcOutput::output(vec![])
+        },
+        "SLOW.".into(),
+    );
+    assert!(h.state_mut().state.queue_job(job));
+    assert_eq!(h.state().busy(), Some("Running Slow..."));
+    h.step();
+    assert!(
+        h.state().state.pending_job.is_none(),
+        "app did not start it"
+    );
+    assert_eq!(h.state().busy(), Some("Running Slow..."));
+    h.step();
+    // Busy: menus and the main area are disabled, the status bar shows the job.
+    assert!(h.get_by_label("File").accesskit_node().is_disabled());
+    h.get_by_label("Running Slow...");
+    tx.send(()).unwrap();
+    h.state_mut().wait_for_job();
+    h.run();
+    assert!(h.state().busy().is_none());
+    assert_eq!(h.state().state.outputs.last().unwrap().title, "Slow");
+    assert!(!h.get_by_label("File").accesskit_node().is_disabled());
+}
+
+#[test]
+fn exit_sends_close_once_and_resets() {
+    let mut h = harness();
+    h.state_mut().state.exit_requested = true;
+    h.step();
+    assert!(!h.state().state.exit_requested);
+}
+
 #[test]
 fn top_level_menus_in_spss_order() {
     let h = harness();
@@ -68,11 +145,11 @@ fn analyze_regression_linear_enabled_glm_disabled() {
     linear.click();
     h.run();
     // Not implemented yet: a message names the dialog.
-    let m = h.state().state.message.clone().expect("message");
+    let m = h.state().state.message().cloned().expect("message");
     assert_eq!(m.title, "Linear Regression");
     h.get_by_label("OK").click();
     h.run();
-    assert!(h.state().state.message.is_none());
+    assert!(h.state().state.message().is_none());
 }
 
 #[test]
@@ -112,10 +189,7 @@ fn help_about_and_window_output() {
     h.run();
     h.get_by_label("About Statik").click();
     h.run();
-    assert_eq!(
-        h.state().state.message.as_ref().unwrap().title,
-        "About Statik"
-    );
+    assert_eq!(h.state().state.message().unwrap().title, "About Statik");
     h.get_by_label("OK").click();
     h.run();
     h.get_by_label("Window").click();
@@ -159,7 +233,7 @@ fn error_shows_message_box() {
     h.get_by_label("Error");
     h.get_by_label("OK").click();
     h.run();
-    assert!(h.state().state.message.is_none());
+    assert!(h.state().state.message().is_none());
 }
 
 #[test]

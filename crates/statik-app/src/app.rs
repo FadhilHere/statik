@@ -3,11 +3,15 @@
 //! [`StatikApp::show`] draws one frame into a root `Ui`; `eframe::App::ui` calls it, and so do the
 //! `egui_kittest` tests (`Harness::builder().build_ui_state(|ui, app| app.show(ui), app)`).
 //! User actions go through [`StatikApp::dispatch`]: quick commands change [`AppState`] at once;
-//! long ones (open, import, save, procedures) become a [`RunningJob`] on a worker thread, and
-//! while it runs every command is blocked (menus greyed out, shortcuts ignored, busy spinner in
-//! the status bar).
+//! long ones (open, import, save, procedures) become a [`RunningJob`] on a worker thread. Code
+//! that only has `&mut AppState` queues a job with [`AppState::queue_job`]; `show` starts it on
+//! the next frame. While a job runs (or waits to start) the app is busy: commands are ignored,
+//! the menus, main area and Output window are disabled, and the status bar shows a spinner.
+//!
+//! Tests: after queueing or dispatching a job, call [`StatikApp::wait_for_job`] before asserting
+//! on `state.outputs` or the document.
 use crate::dialogs::message::message_box;
-use crate::jobs::{Job, RunningJob};
+use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
 use crate::state::{AppState, Command, Message, Prepared};
 use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand};
@@ -42,39 +46,49 @@ impl StatikApp {
         }
     }
 
-    /// Label of the running job, if any.
+    /// Label of the running (or queued) job, if any.
     pub fn busy(&self) -> Option<&str> {
-        self.job.as_ref().map(|j| j.label.as_str())
+        self.job
+            .as_ref()
+            .map(|j| j.label.as_str())
+            .or_else(|| self.state.pending_job.as_ref().map(|j| j.label.as_str()))
     }
 
-    /// Block until the running job (if any) has finished and apply its result (tests).
+    /// Block until the running job and any queued job have finished, applying their results
+    /// (tests). A queued job that was not started yet runs inline.
     pub fn wait_for_job(&mut self) {
-        if let Some(j) = self.job.take() {
-            let r = j.wait();
-            self.finish(r);
+        loop {
+            if let Some(j) = self.job.take() {
+                let r = j.wait();
+                self.finish(r);
+            } else if let Some(job) = self.state.pending_job.take() {
+                let r = job.run_inline();
+                self.finish(r);
+            } else {
+                break;
+            }
         }
     }
 
-    fn finish(&mut self, r: crate::jobs::JobResult) {
+    fn finish(&mut self, r: JobResult) {
         if let Err(e) = self.state.finish(r) {
-            self.state.message = Some(Message::error(e));
+            self.state.push_message(Message::error(e));
         }
     }
 
-    /// Run a command: apply it now or start its job. Ignored while a job runs.
+    /// Run a command: apply it now or start its job. Ignored while busy.
     pub fn dispatch(&mut self, cmd: Command, ctx: &Context) {
-        if self.job.is_some() {
+        if self.busy().is_some() {
             return;
         }
         match self.state.prepare(cmd) {
             Prepared::Done(Ok(())) => {}
-            Prepared::Done(Err(e)) => self.state.message = Some(Message::error(e)),
+            Prepared::Done(Err(e)) => self.state.push_message(Message::error(e)),
             Prepared::Job(job) => self.start(job, ctx),
         }
     }
 
-    /// Start a job on a worker thread (also used for procedures:
-    /// `app.start(app.state.procedure_job(...), ctx)`).
+    /// Start a job on a worker thread. Ignored while another job runs.
     pub fn start(&mut self, job: Job, ctx: &Context) {
         if self.job.is_some() {
             return;
@@ -82,7 +96,7 @@ impl StatikApp {
         let waker = ctx.clone();
         match RunningJob::spawn(job, move || waker.request_repaint()) {
             Ok(j) => self.job = Some(j),
-            Err(e) => self.state.message = Some(Message::error(e)),
+            Err(e) => self.state.push_message(Message::error(e)),
         }
     }
 
@@ -124,7 +138,7 @@ impl StatikApp {
             }
             MenuAction::ShowDataEditor => ctx.send_viewport_cmd(ViewportCommand::Focus),
             MenuAction::About => {
-                self.state.message = Some(Message::info(
+                self.state.push_message(Message::info(
                     "About Statik",
                     format!(
                         "Statik {}\n\nA lightweight statistics program for students.\nOpen .sav, CSV and Excel data, run analyses and copy the output to Word.",
@@ -161,7 +175,12 @@ impl StatikApp {
             self.job = None;
             self.finish(r);
         }
-        let busy = self.job.is_some();
+        if self.job.is_none()
+            && let Some(job) = self.state.pending_job.take()
+        {
+            self.start(job, &ctx);
+        }
+        let busy = self.busy().is_some();
 
         let title = self.state.title();
         if title != self.title_sent {
@@ -174,7 +193,7 @@ impl StatikApp {
             action = menu_bar(ui, &self.state, !busy);
         });
 
-        if !busy && self.state.message.is_none() {
+        if !busy && self.state.message().is_none() {
             ui.input_mut(|i| {
                 if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)) {
                     action = Some(MenuAction::OpenData);
@@ -197,49 +216,57 @@ impl StatikApp {
         });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            // Placeholder until the Data View / Variable View (Task 3).
-            let ds = &self.state.doc.ds;
-            ui.label(format!("{} variables, {} cases", ds.n_vars(), ds.n_cases()));
+            // Disabled while busy, so views cannot edit the data a job is working on.
+            ui.add_enabled_ui(!busy, |ui| {
+                // Placeholder until the Data View / Variable View (Task 3).
+                let ds = self.state.doc.ds();
+                ui.label(format!("{} variables, {} cases", ds.n_vars(), ds.n_cases()));
+            });
         });
 
         if self.state.show_output {
-            self.output_placeholder(&ctx);
+            self.output_window(&ctx, busy);
         }
 
-        if let Some(msg) = &self.state.message
+        if let Some(msg) = self.state.message()
             && message_box(&ctx, msg)
         {
-            self.state.message = None;
+            self.state.dismiss_message();
         }
 
         if let Some(a) = action {
             self.handle(a, &ctx);
         }
         if self.state.exit_requested {
+            // One close request per Exit; a cancelled close (Task 7) leaves the app running.
             ctx.send_viewport_cmd(ViewportCommand::Close);
+            self.state.exit_requested = false;
         }
     }
 
-    /// Minimal output list until the Output viewer (Task 4).
-    fn output_placeholder(&mut self, ctx: &Context) {
+    /// Minimal output list until the Output viewer (Task 4). Its contents are disabled while
+    /// `busy`; the Task 4 viewport must keep that gate.
+    fn output_window(&mut self, ctx: &Context, busy: bool) {
         let mut open = true;
         egui::Window::new("Output")
             .open(&mut open)
             .default_size([480.0, 360.0])
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for e in &self.state.outputs {
-                        ui.strong(&e.title);
-                        if !e.log.is_empty() {
-                            ui.monospace(&e.log);
-                        }
-                        for it in &e.items {
-                            if let output_model::OutputItem::Warning(w) = it {
-                                ui.label(format!("Warning: {w}"));
+                ui.add_enabled_ui(!busy, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for e in &self.state.outputs {
+                            ui.strong(&e.title);
+                            if !e.log.is_empty() {
+                                ui.monospace(&e.log);
                             }
+                            for it in &e.items {
+                                if let output_model::OutputItem::Warning(w) = it {
+                                    ui.label(format!("Warning: {w}"));
+                                }
+                            }
+                            ui.separator();
                         }
-                        ui.separator();
-                    }
+                    });
                 });
             });
         if !open {

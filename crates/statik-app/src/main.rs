@@ -4,11 +4,16 @@
 use statik_app::{AppState, StatikApp, icon};
 use std::io::Write;
 
-/// Release builds abort on panic, so write a short crash note first (best effort):
-/// `%LOCALAPPDATA%\Statik\crash.txt` (or the temp directory).
+/// Write a short crash note for panics that end the app (best effort):
+/// `%LOCALAPPDATA%\Statik\crash.txt` (or the temp directory). Panics on job worker threads are
+/// caught by the job runner and shown as an error message, so they are not written here.
 fn install_crash_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().name() == Some(statik_app::jobs::WORKER_NAME) {
+            default(info);
+            return;
+        }
         let dir = std::env::var_os("LOCALAPPDATA")
             .map(|d| std::path::PathBuf::from(d).join("Statik"))
             .unwrap_or_else(std::env::temp_dir);
