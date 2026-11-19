@@ -10,12 +10,20 @@
 //!
 //! Tests: after queueing or dispatching a job, call [`StatikApp::wait_for_job`] before asserting
 //! on `state.outputs` or the document.
+//!
+//! **Unsaved changes.** Every action that would drop the document (closing the window, File ▸
+//! Exit, New, Open, Import CSV / Excel; see [`Guarded`]) goes through [`StatikApp::guard`]: when
+//! the data is dirty it asks "Save contents of data editor to <name>?" (Yes / No / Cancel). Yes
+//! saves (Save As... for untitled or imported data) and continues the action only once the save
+//! has succeeded; No continues; Cancel drops it (a window close is cancelled with
+//! `ViewportCommand::CancelClose`). File dialogs go through a replaceable picker
+//! ([`StatikApp::with_picker`]) so tests can script them.
 use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::import::show_import;
-use crate::dialogs::message::message_box;
+use crate::dialogs::message::{Answer, message_box, save_changes_box};
 use crate::dialogs::show_dialogs;
 use crate::editor::View;
-use crate::jobs::{Job, JobResult, RunningJob};
+use crate::jobs::{Job, JobResult, RunningJob, SaveKind};
 use crate::menu::{MenuAction, menu_bar};
 use crate::output::{OutputAction, output_window};
 use crate::state::{AppState, Command, Message, Prepared};
@@ -24,11 +32,54 @@ use crate::variable_view::{commit_var_edit, variable_view};
 use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand, ViewportId};
 use std::path::PathBuf;
 
+/// An action that replaces or closes the document, so it asks about unsaved changes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Guarded {
+    /// Closing the window, or File ▸ Exit.
+    Exit,
+    /// File ▸ New ▸ Data.
+    New,
+    /// File ▸ Open ▸ Data...
+    Open,
+    /// File ▸ Import Data ▸ CSV Data...
+    ImportCsv,
+    /// File ▸ Import Data ▸ Excel...
+    ImportExcel,
+}
+
+/// A file dialog the app needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickRequest {
+    /// File ▸ Open ▸ Data...: a data file to open.
+    OpenData,
+    /// File ▸ Import Data ▸ CSV Data...
+    ImportCsv,
+    /// File ▸ Import Data ▸ Excel...
+    ImportExcel,
+    /// Save Data As: a `.sav` file name, suggesting `file_name` in `dir`.
+    SaveData {
+        file_name: String,
+        dir: Option<PathBuf>,
+    },
+}
+
+/// Shows a file dialog and returns the chosen path (`None` = cancelled).
+pub type Picker = Box<dyn FnMut(&PickRequest) -> Option<PathBuf>>;
+
 pub struct StatikApp {
     pub state: AppState,
     job: Option<RunningJob>,
     /// Last title sent to the window, to send it only when it changes.
     title_sent: String,
+    picker: Picker,
+    /// The "Save contents of data editor" question being asked, and for which action.
+    save_prompt: Option<Guarded>,
+    /// The action to continue when the save started by answering Yes succeeds.
+    after_save: Option<Guarded>,
+    /// The action to continue on the next frame (its save succeeded).
+    resume: Option<Guarded>,
+    /// The window may close: the user has dealt with unsaved changes.
+    close_ok: bool,
 }
 
 impl Default for StatikApp {
@@ -44,13 +95,65 @@ const OPEN_FILTERS: [(&str, &[&str]); 4] = [
     ("Excel (*.xlsx;*.xls)", &["xlsx", "xls"]),
 ];
 
+/// The native file dialogs.
+fn rfd_pick(req: &PickRequest) -> Option<PathBuf> {
+    match req {
+        PickRequest::OpenData => {
+            let mut d = rfd::FileDialog::new().set_title("Open Data");
+            for (name, ext) in OPEN_FILTERS {
+                d = d.add_filter(name, ext);
+            }
+            d.pick_file()
+        }
+        PickRequest::ImportCsv => rfd::FileDialog::new()
+            .set_title("Open CSV Data")
+            .add_filter("CSV (*.csv;*.txt)", &["csv", "txt"])
+            .pick_file(),
+        PickRequest::ImportExcel => rfd::FileDialog::new()
+            .set_title("Open Excel File")
+            .add_filter("Excel (*.xlsx;*.xls)", &["xlsx", "xls"])
+            .pick_file(),
+        PickRequest::SaveData { file_name, dir } => {
+            let mut d = rfd::FileDialog::new()
+                .set_title("Save Data As")
+                .add_filter("SPSS Statistics (*.sav)", &["sav"])
+                .set_file_name(file_name);
+            if let Some(dir) = dir {
+                d = d.set_directory(dir);
+            }
+            d.save_file()
+        }
+    }
+}
+
 impl StatikApp {
     pub fn new(state: AppState) -> Self {
         StatikApp {
             state,
             job: None,
             title_sent: String::new(),
+            picker: Box::new(rfd_pick),
+            save_prompt: None,
+            after_save: None,
+            resume: None,
+            close_ok: false,
         }
+    }
+
+    /// Use `picker` instead of the native file dialogs (tests).
+    pub fn with_picker(mut self, picker: Picker) -> Self {
+        self.picker = picker;
+        self
+    }
+
+    /// The action waiting at the "Save contents of data editor" question, if it is asked.
+    pub fn save_prompt(&self) -> Option<Guarded> {
+        self.save_prompt
+    }
+
+    /// The window is closing (or may close): unsaved changes were dealt with.
+    pub fn closing(&self) -> bool {
+        self.close_ok
     }
 
     /// Label of the running (or queued) job, if any.
@@ -78,7 +181,23 @@ impl StatikApp {
     }
 
     fn finish(&mut self, r: JobResult) {
-        if let Err(e) = self.state.finish(r) {
+        let user_save = matches!(
+            r,
+            JobResult::Saved {
+                kind: SaveKind::User,
+                ..
+            }
+        );
+        let result = self.state.finish(r);
+        // The save started by "Yes" at the save-changes question: continue only if it worked.
+        if let Some(a) = self.after_save.take() {
+            if user_save && result.is_ok() && !self.state.doc.dirty() {
+                self.resume = Some(a);
+            } else {
+                self.state.cancel_exit();
+            }
+        }
+        if let Err(e) = result {
             self.state.push_message(Message::error(e));
         }
     }
@@ -107,38 +226,82 @@ impl StatikApp {
         }
     }
 
-    /// Act on a menu choice (file dialogs are shown here).
-    pub fn handle(&mut self, action: MenuAction, ctx: &Context) {
+    /// Run `action`, first asking about unsaved changes if the data is dirty. Ignored while busy
+    /// (the menus are disabled then; a window close is handled in [`Self::show`]).
+    pub fn guard(&mut self, action: Guarded, ctx: &Context) {
+        if self.busy().is_some() {
+            return;
+        }
+        self.state.commit_pending_edits();
+        if self.state.doc.dirty() {
+            self.save_prompt = Some(action);
+        } else {
+            self.proceed(action, ctx);
+        }
+    }
+
+    /// Carry out a guarded action (unsaved changes were dealt with).
+    fn proceed(&mut self, action: Guarded, ctx: &Context) {
         match action {
-            MenuAction::Cmd(c) => self.dispatch(c, ctx),
-            MenuAction::OpenData => {
-                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
-                let mut d = rfd::FileDialog::new().set_title("Open Data");
-                for (name, ext) in OPEN_FILTERS {
-                    d = d.add_filter(name, ext);
-                }
-                if let Some(p) = d.pick_file() {
+            Guarded::Exit => {
+                self.close_ok = true;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            Guarded::New => self.dispatch(Command::New, ctx),
+            Guarded::Open => {
+                if let Some(p) = (self.picker)(&PickRequest::OpenData) {
                     self.dispatch(Command::Open(p), ctx);
                 }
             }
-            MenuAction::ImportCsv => {
-                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
-                let d = rfd::FileDialog::new()
-                    .set_title("Open CSV Data")
-                    .add_filter("CSV (*.csv;*.txt)", &["csv", "txt"]);
-                if let Some(p) = d.pick_file() {
+            Guarded::ImportCsv => {
+                if let Some(p) = (self.picker)(&PickRequest::ImportCsv) {
                     self.state.open_import_csv(p);
                 }
             }
-            MenuAction::ImportExcel => {
-                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
-                let d = rfd::FileDialog::new()
-                    .set_title("Open Excel File")
-                    .add_filter("Excel (*.xlsx;*.xls)", &["xlsx", "xls"]);
-                if let Some(p) = d.pick_file() {
+            Guarded::ImportExcel => {
+                if let Some(p) = (self.picker)(&PickRequest::ImportExcel) {
                     self.state.open_import_excel(p);
                 }
             }
+        }
+    }
+
+    /// The answer to "Save contents of data editor to <name>?" for `action`.
+    fn answer_save_prompt(&mut self, action: Guarded, answer: Answer, ctx: &Context) {
+        match answer {
+            Answer::Yes => {
+                let cmd = if self.state.needs_save_as() {
+                    match self.pick_save_path() {
+                        Some(p) => Command::SaveAs(p),
+                        None => {
+                            self.state.cancel_exit();
+                            return;
+                        }
+                    }
+                } else {
+                    Command::Save
+                };
+                self.dispatch(cmd, ctx);
+                if self.job.is_some() {
+                    self.after_save = Some(action);
+                } else {
+                    self.state.cancel_exit();
+                }
+            }
+            Answer::No => self.proceed(action, ctx),
+            Answer::Cancel => self.state.cancel_exit(),
+        }
+    }
+
+    /// Act on a menu choice (file dialogs are shown here).
+    pub fn handle(&mut self, action: MenuAction, ctx: &Context) {
+        match action {
+            MenuAction::Cmd(Command::New) => self.guard(Guarded::New, ctx),
+            MenuAction::Cmd(Command::Exit) => self.guard(Guarded::Exit, ctx),
+            MenuAction::Cmd(c) => self.dispatch(c, ctx),
+            MenuAction::OpenData => self.guard(Guarded::Open, ctx),
+            MenuAction::ImportCsv => self.guard(Guarded::ImportCsv, ctx),
+            MenuAction::ImportExcel => self.guard(Guarded::ImportExcel, ctx),
             MenuAction::Save if !self.state.needs_save_as() => self.dispatch(Command::Save, ctx),
             MenuAction::Save | MenuAction::SaveAs => {
                 if let Some(p) = self.pick_save_path() {
@@ -169,7 +332,7 @@ impl StatikApp {
         }
     }
 
-    fn pick_save_path(&self) -> Option<PathBuf> {
+    fn pick_save_path(&mut self) -> Option<PathBuf> {
         let stem = match &self.state.doc.path {
             Some(p) => p
                 .file_stem()
@@ -177,14 +340,17 @@ impl StatikApp {
                 .unwrap_or_default(),
             None => format!("Untitled{}", self.state.untitled_no),
         };
-        let mut d = rfd::FileDialog::new()
-            .set_title("Save Data As")
-            .add_filter("SPSS Statistics (*.sav)", &["sav"])
-            .set_file_name(format!("{stem}.sav"));
-        if let Some(dir) = self.state.doc.path.as_ref().and_then(|p| p.parent()) {
-            d = d.set_directory(dir);
-        }
-        d.save_file()
+        let dir = self
+            .state
+            .doc
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.to_path_buf());
+        (self.picker)(&PickRequest::SaveData {
+            file_name: format!("{stem}.sav"),
+            dir,
+        })
     }
 
     /// Draw one frame.
@@ -199,6 +365,20 @@ impl StatikApp {
             && let Some(job) = self.state.pending_job.take()
         {
             self.start(job, &ctx);
+        }
+        if let Some(a) = self.resume.take() {
+            self.proceed(a, &ctx);
+        }
+        // Closing the window (title-bar X, Alt+F4): ask about unsaved changes first.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_ok {
+            self.state.commit_pending_edits();
+            if self.state.doc.dirty() {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.state.cancel_exit();
+                self.save_prompt = Some(Guarded::Exit);
+            } else {
+                self.close_ok = true;
+            }
         }
         let busy = self.busy().is_some();
         // A procedure dialog is modal: the menus and the Data Editor wait until it closes.
@@ -215,7 +395,7 @@ impl StatikApp {
             action = menu_bar(ui, &self.state, !busy && !modal);
         });
 
-        if !busy && !modal && self.state.message().is_none() {
+        if !busy && !modal && self.state.message().is_none() && self.save_prompt.is_none() {
             ui.input_mut(|i| {
                 if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)) {
                     action = Some(MenuAction::OpenData);
@@ -295,6 +475,21 @@ impl StatikApp {
             self.state.dismiss_message();
         }
 
+        // The save-changes question waits for a running job (e.g. a save) and for messages.
+        if let Some(a) = self.save_prompt
+            && self.busy().is_none()
+            && self.state.message().is_none()
+        {
+            if !self.state.doc.dirty() {
+                // Saved meanwhile: nothing to ask.
+                self.save_prompt = None;
+                self.proceed(a, &ctx);
+            } else if let Some(answer) = save_changes_box(&ctx, &self.state.doc_name()) {
+                self.save_prompt = None;
+                self.answer_save_prompt(a, answer, &ctx);
+            }
+        }
+
         if let Some(a) = action {
             self.handle(a, &ctx);
         }
@@ -302,9 +497,10 @@ impl StatikApp {
             self.handle_output(a, &ctx);
         }
         if self.state.exit_requested {
-            // One close request per Exit; a cancelled close (Task 7) leaves the app running.
-            ctx.send_viewport_cmd(ViewportCommand::Close);
+            // File ▸ Exit from code that only has the state: ask about unsaved changes, then
+            // close.
             self.state.exit_requested = false;
+            self.guard(Guarded::Exit, &ctx);
         }
     }
 

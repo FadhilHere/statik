@@ -388,18 +388,23 @@ impl AppState {
     /// Window title: `"basic.sav [DataSet1] - Statik Data Editor"`, `"Untitled1 [DataSet0] - ..."`,
     /// with a leading `*` when there are unsaved changes.
     pub fn title(&self) -> String {
-        let name = match &self.doc.path {
-            Some(p) => p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| p.display().to_string()),
-            None => format!("Untitled{}", self.untitled_no),
-        };
+        let name = self.doc_name();
         let star = if self.doc.dirty { "*" } else { "" };
         format!(
             "{star}{name} [DataSet{}] - Statik Data Editor",
             self.dataset_no
         )
+    }
+
+    /// The document's name: its file name (`basic.sav`, `data.csv`) or `UntitledN`.
+    pub fn doc_name(&self) -> String {
+        match &self.doc.path {
+            Some(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.display().to_string()),
+            None => format!("Untitled{}", self.untitled_no),
+        }
     }
 
     /// Save must go through Save As... (new document, or data imported from CSV/XLSX).
