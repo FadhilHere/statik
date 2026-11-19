@@ -56,8 +56,29 @@ impl ItemRef {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shot {
     pub item: ItemRef,
+    /// Frames to wait before capturing (the context menu must be gone).
     pub wait: u8,
+    /// Scrolls done to bring the item fully into view.
+    pub scrolls: u8,
     pub sent: bool,
+    /// `InputState::time` when the request was sent; after [`SHOT_TIMEOUT`] s without a
+    /// picture the copy fails with a message.
+    pub sent_at: f64,
+}
+
+/// Seconds to wait for the screenshot of a "Copy as Image".
+pub const SHOT_TIMEOUT: f64 = 2.0;
+
+impl Shot {
+    pub fn new(item: ItemRef) -> Self {
+        Shot {
+            item,
+            wait: 2,
+            scrolls: 0,
+            sent: false,
+            sent_at: 0.0,
+        }
+    }
 }
 
 /// Tag carried by our screenshot request.
@@ -70,6 +91,8 @@ pub struct OutputView {
     pub selected: Option<ItemRef>,
     /// Scroll the document to this item on the next frame.
     pub scroll_to: Option<ItemRef>,
+    /// Jump there without the scroll animation (before a screenshot).
+    scroll_instant: bool,
     /// Where each item was drawn in the last frame (screen points).
     pub item_rects: HashMap<ItemRef, Rect>,
     pub shot: Option<Shot>,
@@ -117,7 +140,17 @@ pub fn output_window(ctx: &Context, state: &mut AppState, busy: bool) -> Option<
             if class == ViewportClass::Immediate && ui.input(|i| i.viewport().close_requested()) {
                 state.show_output = false;
             }
-            output_ui(ui, state, busy)
+            let action = output_ui(ui, state, busy);
+            // In its own window the viewer shows messages too (e.g. a failed copy), so they
+            // are not hidden behind it in the Data Editor. Embedded, the Data Editor's box
+            // is already on screen.
+            if class == ViewportClass::Immediate
+                && let Some(msg) = state.message()
+                && crate::dialogs::message::message_box(ui.ctx(), msg)
+            {
+                state.dismiss_message();
+            }
+            action
         },
     )
 }
@@ -261,6 +294,7 @@ fn document(ui: &mut Ui, state: &mut AppState) {
                 ui.add_space(ITEM_GAP);
             }
         });
+    state.viewer.scroll_instant = false;
     for a in actions {
         match a {
             DocAction::Select(r) => state.viewer.selected = Some(r),
@@ -287,7 +321,12 @@ fn item_frame(
     let rect = resp.rect;
     v.item_rects.insert(r, rect);
     if scroll_to == Some(r) {
-        ui.scroll_to_rect(rect.expand(6.0), Some(Align::TOP));
+        let anim = if v.scroll_instant {
+            egui::style::ScrollAnimation::none()
+        } else {
+            ui.style().scroll_animation
+        };
+        ui.scroll_to_rect_animation(rect.expand(6.0), Some(Align::TOP), anim);
     }
     let click = ui.interact(
         rect,
@@ -469,11 +508,7 @@ fn copy_item(ctx: &Context, state: &mut AppState, r: ItemRef, image: bool) {
     };
     let item = r.item.and_then(|i| entry.items.get(i));
     if image || matches!(item, Some(OutputItem::Chart(_))) {
-        state.viewer.shot = Some(Shot {
-            item: r,
-            wait: 2,
-            sent: false,
-        });
+        state.viewer.shot = Some(Shot::new(r));
         ctx.request_repaint();
         return;
     }
@@ -491,31 +526,50 @@ fn copy_item(ctx: &Context, state: &mut AppState, r: ItemRef, image: bool) {
 
 /// Count down a pending "Copy as Image" and send the screenshot request.
 fn pump_screenshot(ctx: &Context, state: &mut AppState) {
-    let Some(s) = &mut state.viewer.shot else {
+    let now = ctx.input(|i| i.time);
+    let v = &mut state.viewer;
+    let Some(s) = &mut v.shot else {
         return;
     };
     if s.sent {
+        let left = SHOT_TIMEOUT - (now - s.sent_at);
+        if left <= 0.0 {
+            v.shot = None;
+            state.push_message(Message::error(
+                "Copy as Image failed: the picture of the window was not received.",
+            ));
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+        }
         return;
     }
     if s.wait > 0 {
         s.wait -= 1;
-        // Make sure the item is on screen when the picture is taken.
-        if s.wait == 1
-            && let Some(rect) = state.viewer.item_rects.get(&s.item)
-        {
-            let visible = state
-                .viewer
-                .doc_clip
-                .is_some_and(|c| c.contains_rect(*rect));
-            if !visible {
-                state.viewer.scroll_to = Some(s.item);
-            }
-        }
         ctx.request_repaint();
-    } else {
-        ctx.send_viewport_cmd(ViewportCommand::Screenshot(UserData::new(ShotTag)));
-        s.sent = true;
+        return;
     }
+    // Capture only once the item is fully on screen (or as far as it fits): jump there
+    // without animation and look again on the next frame.
+    let rect = v.item_rects.get(&s.item).copied();
+    let clip = v.doc_clip;
+    let fully_visible = match (rect, clip) {
+        (Some(r), Some(c)) => {
+            c.contains_rect(r)
+                || (r.height() > c.height() && r.top() >= c.top() - 0.5 && r.top() <= c.top() + 8.0)
+        }
+        _ => true,
+    };
+    if !fully_visible && s.scrolls < 4 {
+        s.scrolls += 1;
+        v.scroll_to = Some(s.item);
+        v.scroll_instant = true;
+        ctx.request_repaint();
+        return;
+    }
+    ctx.send_viewport_cmd(ViewportCommand::Screenshot(UserData::new(ShotTag)));
+    s.sent = true;
+    s.sent_at = now;
+    ctx.request_repaint_after(std::time::Duration::from_secs_f64(SHOT_TIMEOUT));
 }
 
 /// A screenshot we asked for arrived: crop it to the item and copy it.

@@ -129,6 +129,7 @@ pub fn run_regression(ds: &mut Dataset, opt: &RegressionOptions) -> Vec<OutputIt
         out.push(OutputItem::Chart(Chart::Histogram {
             title: "Histogram".into(),
             subtitle: sub.clone(),
+            x_label: "Regression Standardized Residual".into(),
             values: zres.clone(),
             normal_curve: true,
         }));

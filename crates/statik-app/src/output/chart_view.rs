@@ -7,7 +7,9 @@ use super::table_view::{
 use egui::{
     Align, Color32, Layout, Rect, Response, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
 };
-use egui_plot::{Bar, BarChart, Line, MarkerShape, Plot, PlotPoints, Points};
+use egui_plot::{
+    AxisHints, Bar, BarChart, Line, MarkerShape, Plot, PlotPoints, Points, uniform_grid_spacer,
+};
 use output_model::{Cell, CellFormat, CellValue, Chart, format_value};
 
 pub const PLOT_W: f32 = 460.0;
@@ -173,7 +175,7 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
     }
     y += GAP;
     let plot_rect = Rect::from_min_size(pos2(rect.left(), y), vec2(PLOT_W, PLOT_H));
-    let plot = Plot::new(id.with("plot"))
+    let base = Plot::new(id.with("plot"))
         .width(PLOT_W)
         .height(PLOT_H)
         .allow_zoom(false)
@@ -195,6 +197,7 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
         Chart::Histogram {
             values,
             normal_curve,
+            x_label,
             ..
         } => {
             let (start, width, counts) = histogram_bins(values);
@@ -226,7 +229,8 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
                     })
                     .collect::<Vec<_>>()
             });
-            plot.y_axis_label("Frequency")
+            let xstep = histogram_x_step(start, end);
+            axes(base, x_label, "Frequency", Some(xstep), None)
                 .include_y(0.0)
                 .show(&mut child, |p| {
                     p.bar_chart(BarChart::new("bars", bars));
@@ -265,21 +269,27 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
             let pts: Vec<[f64; 2]> = observed_cum
                 .iter()
                 .zip(expected_cum)
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
                 .map(|(&x, &y)| [x, y])
                 .collect();
-            plot.x_axis_label("Observed Cum Prob")
-                .y_axis_label("Expected Cum Prob")
-                .include_x(0.0)
-                .include_x(1.0)
-                .include_y(0.0)
-                .include_y(1.0)
-                .show(&mut child, |p| {
-                    p.line(
-                        Line::new("diagonal", PlotPoints::from(vec![[0.0, 0.0], [1.0, 1.0]]))
-                            .stroke(black),
-                    );
-                    p.points(points(pts));
-                });
+            axes(
+                base,
+                "Observed Cum Prob",
+                "Expected Cum Prob",
+                Some(0.2),
+                Some(0.2),
+            )
+            .include_x(0.0)
+            .include_x(1.0)
+            .include_y(0.0)
+            .include_y(1.0)
+            .show(&mut child, |p| {
+                p.line(
+                    Line::new("diagonal", PlotPoints::from(vec![[0.0, 0.0], [1.0, 1.0]]))
+                        .stroke(black),
+                );
+                p.points(points(pts));
+            });
         }
         Chart::QQPlot {
             observed, expected, ..
@@ -290,22 +300,13 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
                 .filter(|(x, y)| x.is_finite() && y.is_finite())
                 .map(|(&x, &y)| [x, y])
                 .collect();
-            let lo = pts.iter().flat_map(|p| *p).fold(f64::INFINITY, f64::min);
-            let hi = pts
-                .iter()
-                .flat_map(|p| *p)
-                .fold(f64::NEG_INFINITY, f64::max);
-            plot.x_axis_label("Observed Value")
-                .y_axis_label("Expected Normal")
-                .show(&mut child, |p| {
-                    if lo.is_finite() && hi.is_finite() {
-                        p.line(
-                            Line::new("reference", PlotPoints::from(vec![[lo, lo], [hi, hi]]))
-                                .stroke(black),
-                        );
-                    }
-                    p.points(points(pts));
-                });
+            let line = qq_line(observed);
+            axes(base, "Observed Value", "Expected Normal", None, None).show(&mut child, |p| {
+                if let Some(l) = line {
+                    p.line(Line::new("reference", PlotPoints::from(l.to_vec())).stroke(black));
+                }
+                p.points(points(pts));
+            });
         }
         Chart::Scatter {
             x_label,
@@ -314,13 +315,74 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
             ..
         } => {
             let pts: Vec<[f64; 2]> = xy.iter().map(|&(x, y)| [x, y]).collect();
-            plot.x_axis_label(x_label.as_str())
-                .y_axis_label(y_label.as_str())
-                .show(&mut child, |p| {
-                    p.points(points(pts));
-                });
+            axes(base, x_label, y_label, None, None).show(&mut child, |p| {
+                p.points(points(pts));
+            });
         }
     }
+}
+
+/// Axis captions, and tick labels that are not thinned away (egui_plot's default x axis
+/// hides labels closer than 60 px, which left a histogram with only "0"). `xstep`/`ystep`
+/// fix the tick spacing.
+fn axes<'a>(
+    plot: Plot<'a>,
+    x_label: &str,
+    y_label: &str,
+    xstep: Option<f64>,
+    ystep: Option<f64>,
+) -> Plot<'a> {
+    let mut plot = plot
+        .custom_x_axes(vec![
+            AxisHints::new_x()
+                .label(x_label.to_owned())
+                .label_spacing(28.0..=36.0),
+        ])
+        .custom_y_axes(vec![
+            AxisHints::new_y()
+                .label(y_label.to_owned())
+                .label_spacing(18.0..=24.0),
+        ]);
+    if let Some(s) = xstep {
+        plot = plot.x_grid_spacer(uniform_grid_spacer(move |_| [s, s, s]));
+    }
+    if let Some(s) = ystep {
+        plot = plot.y_grid_spacer(uniform_grid_spacer(move |_| [s, s, s]));
+    }
+    plot
+}
+
+/// A "nice" tick step (1, 2 or 5 × 10^k) giving at most about `target` ticks over `span`.
+pub fn nice_step(span: f64, target: f64) -> f64 {
+    if !(span.is_finite() && span > 0.0) {
+        return 1.0;
+    }
+    let raw = span / target.max(1.0);
+    let p = 10f64.powf(raw.log10().floor());
+    [1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .map(|m| m * p)
+        .find(|s| *s >= raw * (1.0 - 1e-9))
+        .unwrap_or(10.0 * p)
+}
+
+/// Histogram x tick step over the bins: whole numbers when the data spans 2 or more units.
+pub fn histogram_x_step(start: f64, end: f64) -> f64 {
+    let s = nice_step(end - start, 8.0);
+    if end - start >= 2.0 { s.max(1.0) } else { s }
+}
+
+/// Reference line of a normal Q-Q plot (observed values on x, expected normal z on y):
+/// SPSS draws z = (x − mean) / sd from the smallest to the largest observed value.
+pub fn qq_line(observed: &[f64]) -> Option<[[f64; 2]; 2]> {
+    let v: Vec<f64> = observed.iter().copied().filter(|x| x.is_finite()).collect();
+    let (m, sd) = mean_sd(&v);
+    if v.is_empty() || !sd.is_finite() || sd <= 0.0 {
+        return None;
+    }
+    let lo = v.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some([[lo, (lo - m) / sd], [hi, (hi - m) / sd]])
 }
 
 fn points(pts: Vec<[f64; 2]>) -> Points<'static> {

@@ -56,6 +56,7 @@ fn skripsi60_full_output() {
     let charts: Vec<&Chart> =
         body[6..].iter().map(|i| if let OutputItem::Chart(c) = i { c } else { panic!("expected chart") }).collect();
     assert!(matches!(charts[0], Chart::Histogram { normal_curve: true, values, .. } if values.len() == 60));
+    assert!(matches!(charts[0], Chart::Histogram { x_label, .. } if x_label == "Regression Standardized Residual"));
     assert_eq!(charts[0].title(), "Histogram");
     assert_eq!(charts[0].subtitle(), Some("Dependent Variable: y"));
     match charts[1] {

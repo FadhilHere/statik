@@ -41,7 +41,7 @@ fn text_title_and_header_markers_are_comma_separated() {
 
 #[test]
 fn chart_subtitle_accessor() {
-    let c = Chart::Histogram { title: "H".into(), subtitle: Some("Dependent Variable: y".into()), values: vec![], normal_curve: false };
+    let c = Chart::Histogram { title: "H".into(), subtitle: Some("Dependent Variable: y".into()), x_label: String::new(), values: vec![], normal_curve: false };
     assert_eq!(c.subtitle(), Some("Dependent Variable: y"));
     assert_eq!(c.title(), "H");
 }
@@ -80,4 +80,22 @@ fn serde_infinities() {
         let back: Cell = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
     }
+}
+
+#[test]
+fn chart_data_with_nan_and_inf_round_trips() {
+    let charts = vec![
+        Chart::Histogram { title: "H".into(), subtitle: None, x_label: "x".into(), values: vec![1.0, f64::NAN, f64::INFINITY], normal_curve: true },
+        Chart::PPPlot { title: "P".into(), subtitle: None, observed_cum: vec![f64::NAN], expected_cum: vec![0.5] },
+        Chart::QQPlot { title: "Q".into(), subtitle: None, observed: vec![f64::NEG_INFINITY], expected: vec![f64::NAN] },
+        Chart::Scatter { title: "S".into(), subtitle: None, x_label: "x".into(), y_label: "y".into(), points: vec![(f64::NAN, 2.5)] },
+    ];
+    let json = serde_json::to_string(&charts).unwrap();
+    assert!(json.contains("\"NaN\"") && json.contains("\"inf\"") && json.contains("\"-inf\""), "{json}");
+    let back: Vec<Chart> = serde_json::from_str(&json).unwrap();
+    assert_eq!(format!("{back:?}"), format!("{charts:?}"));
+    // Older files without x_label still load.
+    let old = r#"{"Histogram":{"title":"H","subtitle":null,"values":[1.0,2.0],"normal_curve":false}}"#;
+    let c: Chart = serde_json::from_str(old).unwrap();
+    assert!(matches!(c, Chart::Histogram { ref x_label, ref values, .. } if x_label.is_empty() && values.len() == 2));
 }

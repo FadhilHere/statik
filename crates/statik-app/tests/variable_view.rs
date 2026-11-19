@@ -1,4 +1,5 @@
 //! Variable View and its dialogs in a headless window (egui_kittest).
+mod common;
 use dataset::{MissingSpec, OrderedValue, VarId, VarType};
 use egui::Key;
 use egui::accesskit::Role;
@@ -47,6 +48,7 @@ fn type_into(h: &mut Harness<'_, StatikApp>, field: &str, text: &str) {
 
 #[test]
 fn variable_view_lists_five_variables() {
+    let _render = common::render_lock();
     let mut h = harness(skripsi());
     h.run();
     h.get_by_label("Variable View").click();
@@ -70,6 +72,7 @@ fn variable_view_lists_five_variables() {
 
 #[test]
 fn rename_in_name_cell() {
+    let _render = common::render_lock();
     let mut h = var_view();
     h.get_by_label("x1").click();
     h.run();
@@ -93,6 +96,7 @@ fn rename_in_name_cell() {
 
 #[test]
 fn value_labels_dialog_adds_a_label() {
+    let _render = common::render_lock();
     let mut h = var_view();
     h.get_by_label("Values of grp").click();
     h.run();
@@ -127,6 +131,7 @@ fn value_labels_dialog_adds_a_label() {
 
 #[test]
 fn missing_values_dialog_sets_discrete_values() {
+    let _render = common::render_lock();
     let mut h = var_view();
     h.get_by_label("Missing of y").click();
     h.run();
@@ -146,6 +151,7 @@ fn missing_values_dialog_sets_discrete_values() {
 
 #[test]
 fn variable_type_dialog_changes_to_string() {
+    let _render = common::render_lock();
     let mut h = var_view();
     h.get_by_label("Type of x1").click();
     h.run();

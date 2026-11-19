@@ -1,5 +1,6 @@
 //! The Output viewer (kittest): regression output, outline, charts, context menu, copy,
 //! save/open output.
+mod common;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -76,6 +77,7 @@ fn count<S>(h: &Harness<'_, S>, label: &str) -> usize {
 
 #[test]
 fn regression_output_page_has_tables_charts_outline_and_snapshot() {
+    let _render = common::render_lock();
     let mut h = viewer(regression_state(), egui::vec2(1100.0, 2600.0));
     h.run();
     // Outline + document both show every table title.
@@ -120,6 +122,7 @@ fn regression_output_page_has_tables_charts_outline_and_snapshot() {
 
 #[test]
 fn procedure_opens_the_output_window_with_its_title() {
+    let _render = common::render_lock();
     let mut h = app(skripsi());
     h.run();
     assert!(h.query_by_label(OUTPUT_TITLE).is_none());
@@ -139,6 +142,7 @@ fn procedure_opens_the_output_window_with_its_title() {
 
 #[test]
 fn outline_click_selects_and_scrolls_to_the_item() {
+    let _render = common::render_lock();
     let mut h = viewer(regression_state(), egui::vec2(1000.0, 600.0));
     h.run();
     let e = h.state().outputs.len() - 1;
@@ -167,6 +171,7 @@ fn outline_click_selects_and_scrolls_to_the_item() {
 
 #[test]
 fn context_menu_offers_copy_copy_as_image_and_disabled_export() {
+    let _render = common::render_lock();
     let mut h = viewer(regression_state(), egui::vec2(1100.0, 1400.0));
     h.run();
     // Right-click the Model Summary table (its title in the document is the 2nd match).
@@ -187,6 +192,7 @@ fn context_menu_offers_copy_copy_as_image_and_disabled_export() {
 #[cfg(windows)]
 #[test]
 fn copy_from_the_context_menu_puts_the_table_on_the_clipboard() {
+    let _render = common::render_lock();
     use clipboard_win::{Clipboard, raw, register_format};
     let _g = CLIP.lock().unwrap_or_else(|e| e.into_inner());
     let mut h = viewer(regression_state(), egui::vec2(1100.0, 1400.0));
@@ -215,6 +221,7 @@ fn copy_from_the_context_menu_puts_the_table_on_the_clipboard() {
 #[cfg(windows)]
 #[test]
 fn copy_as_image_puts_the_cropped_item_on_the_clipboard() {
+    let _render = common::render_lock();
     use clipboard_win::{Clipboard, formats, raw};
     let _g = CLIP.lock().unwrap_or_else(|e| e.into_inner());
     let mut h = viewer(regression_state(), egui::vec2(1100.0, 1400.0));
@@ -266,6 +273,7 @@ fn copy_as_image_puts_the_cropped_item_on_the_clipboard() {
 
 #[test]
 fn busy_disables_the_viewer() {
+    let _render = common::render_lock();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .build_ui_state(
@@ -286,6 +294,7 @@ fn busy_disables_the_viewer() {
 
 #[test]
 fn histogram_legend_is_mean_sd_n() {
+    let _render = common::render_lock();
     let l = histogram_legend(&[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(l, ["Mean = 2.50", "Std. Dev. = 1.291", "N = 4"]);
     // Residual means are ~0: plain decimals, no "-0.00".
@@ -295,6 +304,7 @@ fn histogram_legend_is_mean_sd_n() {
 
 #[test]
 fn save_and_open_output_round_trip() {
+    let _render = common::render_lock();
     let s = regression_state();
     let dir = std::env::temp_dir().join(format!("statik-out-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -316,5 +326,111 @@ fn save_and_open_output_round_trip() {
     let err = t.open_output(&bad).unwrap_err();
     assert!(err.contains("bad.stko"), "{err}");
     assert_eq!(t.outputs.len(), 2 * s.outputs.len());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn qq_reference_line_is_the_fitted_normal_line() {
+    use statik_app::output::chart_view::qq_line;
+    // mean 50, sd 10 (n-1): line from (min, (min-50)/10) to (max, (max-50)/10).
+    let obs = [40.0, 50.0, 60.0];
+    let l = qq_line(&obs).unwrap();
+    assert_eq!(l, [[40.0, -1.0], [60.0, 1.0]]);
+    assert!(qq_line(&[3.0, 3.0]).is_none(), "no line for a constant");
+    assert!(qq_line(&[]).is_none());
+}
+
+#[test]
+fn tick_steps_are_nice_and_whole_for_histograms() {
+    use statik_app::output::chart_view::{histogram_x_step, nice_step};
+    assert_eq!(nice_step(10.0, 8.0), 2.0);
+    assert_eq!(nice_step(1.0, 5.0), 0.2);
+    assert_eq!(nice_step(50.0, 8.0), 10.0);
+    // Standardized residuals -2.5..2.5: whole-number ticks.
+    assert_eq!(histogram_x_step(-2.5, 2.5), 1.0);
+    assert_eq!(histogram_x_step(0.0, 1.0), 0.2);
+}
+
+#[test]
+fn explore_qq_plot_snapshot() {
+    let _render = common::render_lock();
+    use procedures::explore::{ExploreOptions, run_explore};
+    let mut s = skripsi();
+    let opt = ExploreOptions {
+        dependents: vec![s.doc.ds().find("y").unwrap()],
+        normality: true,
+        qq_plot: true,
+    };
+    run_procedure(
+        &mut s,
+        "Explore",
+        move |ds| ProcOutput::output(run_explore(ds, &opt)),
+        "EXAMINE VARIABLES=y\n  /PLOT NPPLOT.".into(),
+    );
+    let e = s.outputs.len() - 1;
+    let i = s.outputs[e]
+        .items
+        .iter()
+        .position(|it| matches!(it, OutputItem::Chart(_)))
+        .unwrap();
+    s.viewer.scroll_to = Some(ItemRef::item(e, i));
+    s.viewer.hide_outline = true;
+    let mut h = viewer(s, egui::vec2(700.0, 560.0));
+    h.run();
+    assert_eq!(
+        h.query_all_by_role_and_label(Role::Image, "Normal Q-Q Plot of y")
+            .count(),
+        1
+    );
+    h.snapshot("output_explore_qq");
+}
+
+#[test]
+fn copy_as_image_without_a_picture_times_out_with_a_message() {
+    let _render = common::render_lock();
+    use statik_app::output::{SHOT_TIMEOUT, Shot};
+    let mut s = regression_state();
+    let mut shot = Shot::new(ItemRef::item(1, 2));
+    shot.wait = 0;
+    shot.sent = true;
+    shot.sent_at = 0.0;
+    s.viewer.shot = Some(shot);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(900.0, 600.0))
+        .with_step_dt(0.25)
+        .build_ui_state(
+            |ui, s: &mut AppState| {
+                output_ui(ui, s, false);
+            },
+            s,
+        );
+    for _ in 0..((SHOT_TIMEOUT / 0.25) as usize + 3) {
+        h.step();
+    }
+    assert!(h.state().viewer.shot.is_none());
+    let m = h.state().message().expect("error message");
+    assert!(m.text.contains("Copy as Image"), "{}", m.text);
+}
+
+#[test]
+fn log_entry_is_a_single_outline_node() {
+    let _render = common::render_lock();
+    let mut h = viewer(skripsi(), egui::vec2(900.0, 500.0));
+    h.run();
+    assert_eq!(count(&h, "Log"), 1);
+}
+
+#[test]
+fn open_output_refuses_huge_files() {
+    let dir = std::env::temp_dir().join(format!("statik-big-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("big.stko");
+    let f = std::fs::File::create(&p).unwrap();
+    f.set_len(statik_app::state::MAX_OUTPUT_FILE + 1).unwrap();
+    drop(f);
+    let mut s = AppState::new();
+    let err = s.open_output(&p).unwrap_err();
+    assert!(err.contains("too large"), "{err}");
+    assert!(s.outputs.is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }

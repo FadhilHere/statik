@@ -1,3 +1,4 @@
+mod common;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use statik_app::StatikApp;
@@ -22,6 +23,7 @@ fn button_labels(h: &Harness<'_, StatikApp>) -> Vec<String> {
 
 #[test]
 fn rendered_menu_bar_is_exactly_the_spss_menus() {
+    let _render = common::render_lock();
     // With no menu open, the only buttons on screen are the top-level menus (exactly these 11)
     // and the Data View / Variable View tabs at the bottom.
     let h = harness();
@@ -47,6 +49,7 @@ fn rendered_menu_bar_is_exactly_the_spss_menus() {
 
 #[test]
 fn queued_job_is_started_by_the_app_and_gates_the_ui() {
+    let _render = common::render_lock();
     let mut h = harness();
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/data/skripsi60.csv");
     h.state_mut()
@@ -87,6 +90,7 @@ fn queued_job_is_started_by_the_app_and_gates_the_ui() {
 
 #[test]
 fn exit_sends_close_once_and_resets() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.state_mut().state.exit_requested = true;
     h.step();
@@ -95,6 +99,7 @@ fn exit_sends_close_once_and_resets() {
 
 #[test]
 fn top_level_menus_in_spss_order() {
+    let _render = common::render_lock();
     let h = harness();
     let mut xs = Vec::new();
     for label in TOP_MENUS {
@@ -130,6 +135,7 @@ fn top_level_menus_in_spss_order() {
 
 #[test]
 fn analyze_regression_linear_enabled_glm_disabled() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.get_by_label("Analyze").click();
     h.run();
@@ -160,6 +166,7 @@ fn analyze_regression_linear_enabled_glm_disabled() {
 
 #[test]
 fn file_menu_items() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.get_by_label("File").click();
     h.run();
@@ -176,6 +183,7 @@ fn file_menu_items() {
 
 #[test]
 fn edit_undo_disabled_view_value_labels_toggles() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.get_by_label("Edit").click();
     h.run();
@@ -190,6 +198,7 @@ fn edit_undo_disabled_view_value_labels_toggles() {
 
 #[test]
 fn help_about_and_window_output() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.get_by_label("Help").click();
     h.run();
@@ -207,6 +216,7 @@ fn help_about_and_window_output() {
 
 #[test]
 fn open_via_job_updates_main_area_and_blocks_while_busy() {
+    let _render = common::render_lock();
     let mut h = harness();
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/data/skripsi60.csv");
     let ctx = h.ctx.clone();
@@ -232,6 +242,7 @@ fn open_via_job_updates_main_area_and_blocks_while_busy() {
 
 #[test]
 fn error_shows_message_box() {
+    let _render = common::render_lock();
     let mut h = harness();
     let ctx = h.ctx.clone();
     h.state_mut()
@@ -246,6 +257,7 @@ fn error_shows_message_box() {
 
 #[test]
 fn icon_is_white_s_on_blue() {
+    let _render = common::render_lock();
     use statik_app::icon::{ICON_SIZE, icon_rgba};
     let px = icon_rgba(ICON_SIZE);
     assert_eq!(px.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
@@ -280,6 +292,7 @@ fn icon_is_white_s_on_blue() {
 /// Snapshot of the empty main window (rendered with wgpu; needs a GPU or software adapter).
 #[test]
 fn snapshot_empty_window() {
+    let _render = common::render_lock();
     let mut h = harness();
     h.run();
     h.snapshot("empty_window");

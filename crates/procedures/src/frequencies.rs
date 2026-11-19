@@ -92,6 +92,7 @@ pub fn run_frequencies(ds: &Dataset, o: &FrequenciesOptions) -> Vec<OutputItem> 
             body.push(OutputItem::Chart(Chart::Histogram {
                 title: "Histogram".into(),
                 subtitle: Some(name.clone()),
+                x_label: name.clone(),
                 values,
                 normal_curve: false,
             }));

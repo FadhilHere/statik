@@ -1,4 +1,5 @@
 //! Data View and Variable View in a headless window (egui_kittest).
+mod common;
 use dataset::{Column, Dataset, OrderedValue, VarId, Variable};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
@@ -31,6 +32,7 @@ fn has_label(h: &Harness<'_, StatikApp>, label: &str) -> bool {
 
 #[test]
 fn data_view_shows_headers_and_first_row() {
+    let _render = common::render_lock();
     let mut h = harness(skripsi());
     h.run();
     for name in ["x1", "x2", "x3", "y", "grp"] {
@@ -49,6 +51,7 @@ fn data_view_shows_headers_and_first_row() {
 
 #[test]
 fn typing_into_a_cell_and_enter_moves_down() {
+    let _render = common::render_lock();
     let mut h = harness(skripsi());
     h.run();
     h.get_by_label("24.25").click();
@@ -81,6 +84,7 @@ fn typing_into_a_cell_and_enter_moves_down() {
 
 #[test]
 fn arrows_and_tab_move_the_cursor() {
+    let _render = common::render_lock();
     let mut h = harness(skripsi());
     h.run();
     h.get_by_label("24.25").click();
@@ -99,6 +103,7 @@ fn arrows_and_tab_move_the_cursor() {
 
 #[test]
 fn copy_and_paste_with_clipboard_events() {
+    let _render = common::render_lock();
     let mut h = harness(skripsi());
     h.run();
     h.get_by_label("24.25").click();
@@ -125,6 +130,7 @@ fn copy_and_paste_with_clipboard_events() {
 
 #[test]
 fn double_click_header_opens_its_variable_row() {
+    let _render = common::render_lock();
     // A short step: kittest's default 0.25 s per frame is too slow for a double click (0.3 s).
     let mut h = Harness::builder()
         .with_size(egui::vec2(1024.0, 700.0))
@@ -145,6 +151,7 @@ fn double_click_header_opens_its_variable_row() {
 
 #[test]
 fn system_missing_dot_and_value_labels() {
+    let _render = common::render_lock();
     let mut s = AppState::new();
     let mut ds = Dataset::new();
     let mut v = Variable::numeric("sex");
@@ -167,6 +174,7 @@ fn system_missing_dot_and_value_labels() {
 
 #[test]
 fn large_dataset_scrolls_fast() {
+    let _render = common::render_lock();
     // 100,000 cases x 50 variables; only the visible cells are drawn.
     let mut ds = Dataset::new();
     for j in 0..50 {

@@ -246,3 +246,16 @@ mod windows_clipboard {
         assert_eq!(&dib[..40 + 24], &dib_from_rgba(&rgba, 3, 2)[..]);
     }
 }
+
+#[test]
+fn rtf_maps_other_control_characters_to_spaces() {
+    let mut t = table();
+    t.title = "A\u{1}B\u{1f}C\u{7f}D".into();
+    let r = table_rtf(&t);
+    assert!(r.contains(r"A B C D{\super a}"), "{r}");
+    assert!(
+        !r.chars()
+            .any(|c| (c as u32) < 0x20 && c != '\r' && c != '\n'),
+        "{r}"
+    );
+}

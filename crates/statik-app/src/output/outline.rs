@@ -15,6 +15,24 @@ pub fn outline_ui(ui: &mut Ui, state: &mut AppState) {
                 .default_open(true)
                 .show(ui, |ui| {
                     for (e, entry) in state.outputs.iter().enumerate() {
+                        // An open/save log is one "Log" node (its read warnings follow it),
+                        // not a "Log" group holding another "Log", as in SPSS.
+                        if entry.title == "Log" {
+                            let r = ItemRef::entry(e);
+                            if ui.selectable_label(selected == Some(r), "Log").clicked() {
+                                clicked = Some(r);
+                            }
+                            for (i, it) in entry.items.iter().enumerate() {
+                                let r = ItemRef::item(e, i);
+                                if ui
+                                    .selectable_label(selected == Some(r), item_name(it))
+                                    .clicked()
+                                {
+                                    clicked = Some(r);
+                                }
+                            }
+                            continue;
+                        }
                         CollapsingHeader::new(&entry.title)
                             .id_salt(("outline", e))
                             .default_open(true)

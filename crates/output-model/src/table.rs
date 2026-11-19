@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// serde adapter for `f64`: NaN and the infinities (which JSON cannot hold) are written as the
 /// strings "NaN", "inf" and "-inf".
-mod num_f64 {
+pub(crate) mod num_f64 {
     use serde::de::{self, Visitor};
     use serde::{Deserializer, Serializer};
 
@@ -46,6 +46,36 @@ mod num_f64 {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
         d.deserialize_any(V)
+    }
+}
+
+/// serde adapters for `Vec<f64>` and `Vec<(f64, f64)>` with the same NaN/inf handling as
+/// [`num_f64`] (chart data).
+pub(crate) mod num_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct F(#[serde(with = "super::num_f64")] f64);
+
+    pub fn serialize<S: Serializer>(v: &[f64], s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(v.iter().map(|x| F(*x)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+        Ok(Vec::<F>::deserialize(d)?.into_iter().map(|f| f.0).collect())
+    }
+
+    pub mod pairs {
+        use super::F;
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        pub fn serialize<S: Serializer>(v: &[(f64, f64)], s: S) -> Result<S::Ok, S::Error> {
+            s.collect_seq(v.iter().map(|&(a, b)| (F(a), F(b))))
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(f64, f64)>, D::Error> {
+            Ok(Vec::<(F, F)>::deserialize(d)?.into_iter().map(|(a, b)| (a.0, b.0)).collect())
+        }
     }
 }
 

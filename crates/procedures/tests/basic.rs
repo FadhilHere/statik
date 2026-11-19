@@ -241,7 +241,8 @@ fn frequencies_missing_rows() {
     close(n(&val(t, "15.1", "Cumulative Percent")), 100.0, 1e-9);
     assert!(items
         .iter()
-        .any(|i| matches!(i, OutputItem::Chart(Chart::Histogram { values, normal_curve: false, .. }) if values.len() == 9)));
+        .any(|i| matches!(i, OutputItem::Chart(Chart::Histogram { values, normal_curve: false, x_label, subtitle, .. })
+            if values.len() == 9 && Some(x_label) == subtitle.as_ref() && !x_label.is_empty())));
 }
 
 #[test]

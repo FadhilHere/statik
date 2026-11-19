@@ -66,6 +66,9 @@ impl Doc {
     }
 }
 
+/// Largest `.stko` file File ▸ Open Output reads (bytes).
+pub const MAX_OUTPUT_FILE: u64 = 200_000_000;
+
 /// One run in the output document: a procedure, or a log of an open/save.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OutputEntry {
@@ -322,6 +325,17 @@ impl AppState {
     /// File ▸ Open Output in the viewer: read a `.stko` file and append its entries (the
     /// output already shown is kept), show the viewer and scroll to the first opened entry.
     pub fn open_output(&mut self, path: &Path) -> Result<(), String> {
+        let len = std::fs::metadata(path)
+            .map_err(|e| format!("Cannot read {}: {e}", path.display()))?
+            .len();
+        if len > MAX_OUTPUT_FILE {
+            return Err(format!(
+                "{} is too large to open as output ({} MB; the limit is {} MB).",
+                path.display(),
+                len / 1_000_000,
+                MAX_OUTPUT_FILE / 1_000_000
+            ));
+        }
         let bytes =
             std::fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
         let entries: Vec<OutputEntry> = serde_json::from_slice(&bytes)

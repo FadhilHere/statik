@@ -81,6 +81,8 @@ fn rtf_esc(s: &str) -> String {
             '\n' => o.push_str("\\line "),
             '\r' => {}
             '\t' => o.push_str("\\tab "),
+            // Other control characters are not valid RTF text.
+            c if (c as u32) < 0x20 || c == '\u{7f}' => o.push(' '),
             c if c.is_ascii() => o.push(c),
             c => {
                 let mut buf = [0u16; 2];
