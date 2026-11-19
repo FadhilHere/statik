@@ -18,9 +18,10 @@
 //! has succeeded; No continues; Cancel drops it (a window close is cancelled with
 //! `ViewportCommand::CancelClose`). File dialogs go through a replaceable picker
 //! ([`StatikApp::with_picker`]) so tests can script them.
+use crate::autosave::Autosave;
 use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::import::show_import;
-use crate::dialogs::message::{Answer, message_box, save_changes_box};
+use crate::dialogs::message::{Answer, message_box, recovery_box, save_changes_box};
 use crate::dialogs::show_dialogs;
 use crate::editor::View;
 use crate::jobs::{Job, JobResult, RunningJob, SaveKind};
@@ -80,6 +81,11 @@ pub struct StatikApp {
     resume: Option<Guarded>,
     /// The window may close: the user has dealt with unsaved changes.
     close_ok: bool,
+    /// Autosave of unsaved changes ([`crate::autosave`]); off unless set with
+    /// [`Self::with_autosave`].
+    pub autosave: Autosave,
+    /// A recovery file to offer ("Statik closed unexpectedly. Recover data?").
+    recovery: Option<PathBuf>,
 }
 
 impl Default for StatikApp {
@@ -137,7 +143,21 @@ impl StatikApp {
             after_save: None,
             resume: None,
             close_ok: false,
+            autosave: Autosave::default(),
+            recovery: None,
         }
+    }
+
+    /// Autosave unsaved changes with `autosave`.
+    pub fn with_autosave(mut self, autosave: Autosave) -> Self {
+        self.autosave = autosave;
+        self
+    }
+
+    /// Ask "Statik closed unexpectedly. Recover data?" for the recovery file `path` (found at
+    /// startup with [`crate::autosave::pending_recovery`]).
+    pub fn offer_recovery(&mut self, path: PathBuf) {
+        self.recovery = Some(path);
     }
 
     /// Use `picker` instead of the native file dialogs (tests).
@@ -188,7 +208,12 @@ impl StatikApp {
                 ..
             }
         );
+        let recovered = matches!(r, JobResult::Recovered { .. });
         let result = self.state.finish(r);
+        if recovered && result.is_ok() && self.state.doc.dirty() {
+            // Write the recovered data to a fresh recovery file at once.
+            self.autosave.recovered();
+        }
         // The save started by "Yes" at the save-changes question: continue only if it worked.
         if let Some(a) = self.after_save.take() {
             if user_save && result.is_ok() && !self.state.doc.dirty() {
@@ -369,6 +394,16 @@ impl StatikApp {
         if let Some(a) = self.resume.take() {
             self.proceed(a, &ctx);
         }
+        // Autosave runs on its own thread, also while a job runs.
+        let waker = ctx.clone();
+        if let Some(wait) = self
+            .autosave
+            .tick(&self.state, std::time::Instant::now(), move || {
+                waker.request_repaint()
+            })
+        {
+            ctx.request_repaint_after(wait);
+        }
         // Closing the window (title-bar X, Alt+F4): ask about unsaved changes first.
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_ok {
             self.state.commit_pending_edits();
@@ -429,6 +464,12 @@ impl StatikApp {
                     ui.label("Statik Processor is ready");
                 }
             });
+            if let Some(note) = self.autosave.note() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(note).color(ui.visuals().warn_fg_color))
+                        .on_hover_text("Unsaved changes are not being backed up. Save your data.");
+                });
+            }
         });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -475,8 +516,23 @@ impl StatikApp {
             self.state.dismiss_message();
         }
 
+        // Startup after a crash: offer the newest recovery file.
+        if self.recovery.is_some()
+            && self.busy().is_none()
+            && self.state.message().is_none()
+            && let Some(recover) = recovery_box(&ctx)
+        {
+            let path = self.recovery.take().expect("checked above");
+            if recover {
+                self.dispatch(Command::Recover(path), &ctx);
+            } else {
+                self.autosave.discard();
+            }
+        }
+
         // The save-changes question waits for a running job (e.g. a save) and for messages.
         if let Some(a) = self.save_prompt
+            && self.recovery.is_none()
             && self.busy().is_none()
             && self.state.message().is_none()
         {
@@ -539,5 +595,10 @@ impl StatikApp {
 impl eframe::App for StatikApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+    }
+
+    /// A normal exit: the recovery files are deleted and the clean-exit marker is written.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.autosave.clean_exit();
     }
 }

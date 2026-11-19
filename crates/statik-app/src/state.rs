@@ -189,6 +189,9 @@ pub enum Command {
     HideOutput,
     /// File > Exit.
     Exit,
+    /// Recover data after a crash: read this recovery file (see [`crate::autosave`]) as a new
+    /// untitled document with unsaved changes.
+    Recover(PathBuf),
     OpenDialog(DialogKind),
 }
 
@@ -579,6 +582,17 @@ impl AppState {
                 self.exit_requested = true;
                 Done(Ok(()))
             }
+            Command::Recover(path) => Prepared::Job(Job::new(
+                "Recovering data...",
+                move || match sav_io::read_sav(&path) {
+                    Ok((ds, _)) => JobResult::Recovered { ds, rev },
+                    Err(e) => JobResult::Failed(format!(
+                        "Cannot recover the data from {}:
+{e}",
+                        path.display()
+                    )),
+                },
+            )),
             Command::OpenDialog(kind) => {
                 self.commit_pending_edits();
                 if self.dialogs.open(kind) {
@@ -780,6 +794,21 @@ impl AppState {
                 }
                 self.outputs.push(entry);
                 self.show_output = true;
+                Ok(())
+            }
+            JobResult::Recovered { ds, rev } => {
+                if rev != self.doc.rev {
+                    self.push_message(Message::warning(
+                        "Data changed",
+                        "The data was changed while the recovered data was being read, so it                          was not opened.",
+                    ));
+                    return Ok(());
+                }
+                self.replace_doc(Doc::new(ds, None));
+                self.doc.touch();
+                self.dataset_no = self.take_dataset_no();
+                self.untitled_no = self.next_untitled_no;
+                self.next_untitled_no += 1;
                 Ok(())
             }
             JobResult::Failed(e) => Err(e),

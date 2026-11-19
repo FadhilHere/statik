@@ -1,6 +1,7 @@
 //! Statik desktop application (egui). The binary in `main.rs` only boots the window; everything
 //! else lives here so it can be tested headless (`tests/`).
 pub mod app;
+pub mod autosave;
 pub mod data_view;
 pub mod dialogs;
 pub mod edit;

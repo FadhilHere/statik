@@ -387,10 +387,13 @@ fn import_excel_when_dirty_asks_and_no_opens_the_import_dialog() {
 
     handle(&mut h, MenuAction::ImportExcel);
     h.get_by_label("No").click();
-    h.run();
+    // The Read Excel File dialog shows a spinner while it reads the sheet names: step, not run.
+    h.step();
     assert_eq!(sc.asked(), vec![PickRequest::ImportExcel]);
     assert!(matches!(h.state().state.import, Some(ImportDialog::Excel(_))));
     h.state_mut().state.poll_import(true);
+    h.run();
+    assert!(matches!(h.state().state.import, Some(ImportDialog::Excel(_))));
 }
 
 /// A cell being typed into counts as an unsaved change.

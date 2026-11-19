@@ -70,6 +70,9 @@ pub enum JobResult {
         /// Reverts the change (Compute, Recode); `None` = not undoable (clears the history).
         undo: Option<EditOp>,
     },
+    /// A recovery file (see [`crate::autosave`]) was read: it becomes an untitled document with
+    /// unsaved changes.
+    Recovered { ds: Dataset, rev: u64 },
     /// The job failed; the message is shown to the user.
     Failed(String),
 }

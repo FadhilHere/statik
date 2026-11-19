@@ -1,16 +1,22 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use statik_app::autosave::{self, Autosave};
 use statik_app::{AppState, StatikApp, icon};
 use std::io::Write;
 
 /// Write a short crash note for panics that end the app (best effort):
 /// `%LOCALAPPDATA%\Statik\crash.txt` (or the temp directory). Panics on job worker threads are
-/// caught by the job runner and shown as an error message, so they are not written here.
+/// caught by the job runner and shown as an error message (and those on the autosave thread
+/// become a status-bar note), so they are not written here.
 fn install_crash_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if std::thread::current().name() == Some(statik_app::jobs::WORKER_NAME) {
+        let thread = std::thread::current();
+        if matches!(
+            thread.name(),
+            Some(statik_app::jobs::WORKER_NAME | autosave::THREAD_NAME)
+        ) {
             default(info);
             return;
         }
@@ -41,9 +47,18 @@ fn install_crash_hook() {
 fn main() -> eframe::Result {
     install_crash_hook();
     let state = AppState::new();
+    // Autosave to %LOCALAPPDATA%\Statik\recovery; recovery files newer than the last normal
+    // exit mean Statik closed unexpectedly.
+    let dir = autosave::default_dir();
+    let pending = dir.as_deref().and_then(autosave::pending_recovery);
+    let mut app =
+        StatikApp::new(state).with_autosave(Autosave::new(dir, std::time::Instant::now()));
+    if let Some(p) = pending {
+        app.offer_recovery(p);
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(state.title())
+            .with_title(app.state.title())
             .with_inner_size([1024.0, 700.0])
             .with_min_inner_size([480.0, 320.0])
             .with_icon(icon::icon_data()),
@@ -55,7 +70,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             // Light, like the classic statistics package look.
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            Ok(Box::new(StatikApp::new(state)))
+            Ok(Box::new(app))
         }),
     )
 }
