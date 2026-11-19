@@ -12,6 +12,8 @@
 //! [`AppState::finish`] only swaps data in, replaces the document or clears `dirty` if the
 //! revision is unchanged. Otherwise the newer in-memory state is kept and a conflict message is
 //! queued.
+use crate::edit::EditOp;
+use crate::editor::EditorState;
 use crate::jobs::{Job, JobResult, SaveKind};
 use dataset::Dataset;
 use output_model::OutputItem;
@@ -164,9 +166,15 @@ pub enum Command {
     ImportCsv(PathBuf, CsvOptions),
     /// Excel file and sheet (`None` = first sheet); the first row holds the names.
     ImportXlsx(PathBuf, Option<String>),
-    /// Edit > Undo / Redo (the undo stack comes with the data editor; no-ops for now).
+    /// Edit > Undo / Redo (see [`crate::edit`]).
     Undo,
     Redo,
+    /// Edit > Insert Variable: a new numeric variable before the selected one.
+    InsertVariable,
+    /// Edit > Insert Cases: a blank case before the selected one.
+    InsertCases,
+    /// Edit > Clear: set the selected cells to missing, or delete the selected variables/cases.
+    Clear,
     /// View > Value Labels.
     ToggleValueLabels,
     /// Window > Output (checked / unchecked).
@@ -235,7 +243,13 @@ pub struct AppState {
     pub untitled_no: usize,
     next_dataset_no: usize,
     next_untitled_no: usize,
-    // Undo/redo stacks are added with the data editor (Task 3).
+    /// UI-side state of the Data Editor (view tab, selection, cell being edited, Align/Role/
+    /// Columns that the data model does not hold). Plain data, no UI types.
+    pub editor: EditorState,
+    /// Applied edits, oldest first (at most [`crate::edit::UNDO_LIMIT`]); see [`crate::edit`].
+    pub(crate) undo_stack: Vec<EditOp>,
+    /// Undone edits, most recently undone last.
+    pub(crate) redo_stack: Vec<EditOp>,
 }
 
 impl Default for AppState {
@@ -269,6 +283,9 @@ impl AppState {
             untitled_no: 1,
             next_dataset_no: 1,
             next_untitled_no: 2,
+            editor: EditorState::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -313,9 +330,13 @@ impl AppState {
     }
 
     /// Replace the document; the revision moves on, so jobs started on the old one conflict.
+    /// The undo history and the editor state (selection, Align/Role/Columns) belong to the old
+    /// document and are dropped.
     fn replace_doc(&mut self, mut doc: Doc) {
         doc.rev = self.doc.rev + 1;
         self.doc = doc;
+        self.clear_undo();
+        self.editor = EditorState::default();
     }
 
     /// Queue a job for `StatikApp` to start on the next frame (for code that only has
@@ -337,11 +358,13 @@ impl AppState {
         self.exit_requested = false;
     }
 
+    /// Edit > Undo is available.
     pub fn can_undo(&self) -> bool {
-        false
+        !self.undo_stack.is_empty()
     }
+    /// Edit > Redo is available.
     pub fn can_redo(&self) -> bool {
-        false
+        !self.redo_stack.is_empty()
     }
 
     /// Apply a command synchronously (long-running ones run inline on this thread).
@@ -438,7 +461,26 @@ impl AppState {
                 }
                 Prepared::Job(self.save_job(path, SaveKind::User))
             }
-            Command::Undo | Command::Redo => Done(Ok(())),
+            Command::Undo => {
+                self.undo();
+                Done(Ok(()))
+            }
+            Command::Redo => {
+                self.redo();
+                Done(Ok(()))
+            }
+            Command::InsertVariable => {
+                self.insert_variable_here();
+                Done(Ok(()))
+            }
+            Command::InsertCases => {
+                self.insert_cases_here();
+                Done(Ok(()))
+            }
+            Command::Clear => {
+                self.clear_selection();
+                Done(Ok(()))
+            }
             Command::ToggleValueLabels => {
                 self.value_labels = !self.value_labels;
                 Done(Ok(()))
@@ -607,6 +649,11 @@ impl AppState {
                     if rev == self.doc.rev {
                         self.doc.ds = ds;
                         self.doc.touch();
+                        // The edits on the undo stack refer to the data before the procedure
+                        // (positions, old values), so they cannot be undone across it.
+                        // HOOK (Task 6): push an undo snapshot here instead, e.g. an
+                        // `EditOp` holding the replaced dataset, so Compute/Recode is undoable.
+                        self.clear_undo();
                     } else {
                         self.push_message(Message::warning(
                             "Data changed",

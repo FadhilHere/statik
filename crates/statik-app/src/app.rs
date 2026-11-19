@@ -10,10 +10,13 @@
 //!
 //! Tests: after queueing or dispatching a job, call [`StatikApp::wait_for_job`] before asserting
 //! on `state.outputs` or the document.
+use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::message::message_box;
+use crate::editor::View;
 use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
 use crate::state::{AppState, Command, Message, Prepared};
+use crate::variable_view::{commit_var_edit, variable_view};
 use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand};
 use std::path::PathBuf;
 
@@ -136,6 +139,17 @@ impl StatikApp {
                     self.dispatch(Command::SaveAs(p), ctx);
                 }
             }
+            MenuAction::Copy | MenuAction::Cut => {
+                if self.state.editor.view == View::Data {
+                    commit_edit(&mut self.state);
+                    ctx.copy_text(self.state.copy_selection());
+                    if matches!(action, MenuAction::Cut) {
+                        self.dispatch(Command::Clear, ctx);
+                    }
+                }
+            }
+            // The text arrives as an `Event::Paste`, which the Data View pastes at the cursor.
+            MenuAction::Paste => ctx.send_viewport_cmd(ViewportCommand::RequestPaste),
             MenuAction::ShowDataEditor => ctx.send_viewport_cmd(ViewportCommand::Focus),
             MenuAction::About => {
                 self.state.push_message(Message::info(
@@ -201,6 +215,20 @@ impl StatikApp {
                     action = Some(MenuAction::Save);
                 }
             });
+            // Undo/redo of data edits, unless a text field (cell editor, dialog) has the keys.
+            if !ctx.text_edit_focused() && self.state.editor.var_dialog.is_none() {
+                ui.input_mut(|i| {
+                    let redo = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+                    let redo2 =
+                        KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+                    if i.consume_shortcut(&redo) || i.consume_shortcut(&redo2) {
+                        action = Some(MenuAction::Cmd(Command::Redo));
+                    } else if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z))
+                    {
+                        action = Some(MenuAction::Cmd(Command::Undo));
+                    }
+                });
+            }
         }
 
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -218,9 +246,28 @@ impl StatikApp {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             // Disabled while busy, so views cannot edit the data a job is working on.
             ui.add_enabled_ui(!busy, |ui| {
-                // Placeholder until the Data View / Variable View (Task 3).
-                let ds = self.state.doc.ds();
-                ui.label(format!("{} variables, {} cases", ds.n_vars(), ds.n_cases()));
+                let state = &mut self.state;
+                egui::Panel::bottom("view_tabs").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (label, view) in
+                            [("Data View", View::Data), ("Variable View", View::Variable)]
+                        {
+                            if ui
+                                .selectable_label(state.editor.view == view, label)
+                                .clicked()
+                                && state.editor.view != view
+                            {
+                                commit_edit(state);
+                                commit_var_edit(state);
+                                state.editor.view = view;
+                            }
+                        }
+                    });
+                });
+                match state.editor.view {
+                    View::Data => data_view(ui, state),
+                    View::Variable => variable_view(ui, state),
+                }
             });
         });
 

@@ -180,3 +180,22 @@ fn variable_has_sav_metadata_fields() {
     assert!(n.has_date_format());
     assert!(!Variable::numeric("x").has_date_format());
 }
+
+#[test]
+fn bulk_cases() {
+    let mut d = ds();
+    d.insert_cases(1, 2);
+    assert_eq!(d.n_cases(), 5);
+    assert_eq!(d.numeric(VarId(0))[0], 1.0);
+    assert!(d.numeric(VarId(0))[1].is_nan() && d.numeric(VarId(0))[2].is_nan());
+    let Column::Text(t) = d.column(VarId(1)) else { panic!() };
+    assert_eq!(t, &["x", "", "", "y", "z"]);
+    d.insert_cases(99, 1); // clamped to the end
+    assert_eq!(d.n_cases(), 6);
+    d.delete_cases(1..3).unwrap();
+    d.delete_cases(3..4).unwrap();
+    assert_eq!(d.numeric(VarId(0)), &[1.0, 2.0, 3.0]);
+    assert!(d.delete_cases(2..4).is_err());
+    assert!(d.delete_cases(2..2).is_err());
+    assert_eq!(d.n_cases(), 3);
+}

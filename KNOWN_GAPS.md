@@ -95,3 +95,14 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **Type changes:** `Dataset::set_type` returns how many values were lost (non-blank text that is not a number became system-missing; strings cut when narrowing). Text is parsed with a decimal point only (`78,5` becomes system-missing). Numeric -> String uses the requested width, raised to the longest formatted value so nothing is cut.
 - **String widths:** `VarType::String { width }` is the storage width; `Variable::width` is only the display width. `Dataset::set_string_width` cuts longer values on a character boundary and reports how many.
 - **Recode** rejects NaN rule values and ranges whose lower bound is above the upper bound; output names are compared case-insensitively with full Unicode case folding (as `Dataset::find`).
+
+## Data Editor: Data View & Variable View (Plan 3 Task 3)
+
+- **Align, Role and the Columns of numeric variables are not saved.** The data model has no fields for them, so they are kept in the editor's UI state (keyed by variable name) and are lost on New/Open and not written to `.sav`. Columns of a string variable is its display width and is saved. Align/Role/numeric Columns changes are not on the undo stack.
+- **Width/Columns of numeric variables:** the model has one width; the Variable View "Width" edits it (the print format width), "Columns" only changes the Data View column width.
+- **Copy** puts the values as shown (variable decimals, value labels when View > Value Labels is on) into the clipboard; system-missing becomes an empty cell. Copy with Variable Names/Labels, Paste Variables..., Sort, Find/Replace, Go to Case and Variable Information are not implemented (disabled).
+- **Paste** creates new variables as numeric (F8.2) only; text pasted into a numeric column rejects the whole paste. Strings are cut to the storage width. Pasting text with a value label's text while Value Labels is on enters its value.
+- **Invalid numeric input** shows a message box instead of SPSS's beep; the old value is kept. A comma is accepted as the decimal separator when the text has no point and one comma ("3,5").
+- **Number display:** values are formatted with the variable's decimals; a number too wide for its column is shown in E notation (`1.00E10`), else as asterisks. Date/time/currency formats kept from `.sav` files are shown as plain numbers (the Type column names the format: Date, Time, Comma, Dollar, ...). The Variable Type dialog only offers Numeric and String.
+- **Undo** holds the last 100 edits. New/Open clear it, and a procedure that changes the data (saved variables; later Compute/Recode) clears it as well.
+- The Measure, Align and Role icons are Statik's own drawings.

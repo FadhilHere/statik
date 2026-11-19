@@ -298,6 +298,39 @@ impl Dataset {
         Ok(())
     }
 
+    /// Insert `count` blank cases (NaN / "") before row `at` (clamped to the end), in one pass.
+    pub fn insert_cases(&mut self, at: usize, count: usize) {
+        let at = at.min(self.n_cases());
+        for c in &mut self.cols {
+            match c {
+                Column::Numeric(v) => {
+                    v.splice(at..at, std::iter::repeat_n(f64::NAN, count));
+                }
+                Column::Text(v) => {
+                    v.splice(at..at, std::iter::repeat_n(String::new(), count));
+                }
+            }
+        }
+    }
+
+    /// Delete the cases in `rows` (must be a non-empty range inside the data), in one pass.
+    pub fn delete_cases(&mut self, rows: std::ops::Range<usize>) -> Result<(), DatasetError> {
+        if rows.start >= rows.end || rows.end > self.n_cases() {
+            return Err(DatasetError::OutOfRange(rows.end));
+        }
+        for c in &mut self.cols {
+            match c {
+                Column::Numeric(v) => {
+                    v.drain(rows.clone());
+                }
+                Column::Text(v) => {
+                    v.drain(rows.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Set a numeric cell (-0.0 is stored as 0.0).
     pub fn set_numeric(&mut self, id: VarId, row: usize, v: f64) -> Result<(), DatasetError> {
         match self.cols.get_mut(id.0) {

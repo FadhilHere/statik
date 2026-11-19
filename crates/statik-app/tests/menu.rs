@@ -22,7 +22,8 @@ fn button_labels(h: &Harness<'_, StatikApp>) -> Vec<String> {
 
 #[test]
 fn rendered_menu_bar_is_exactly_the_spss_menus() {
-    // With no menu open, the only buttons on screen are the top-level menus: exactly these 11.
+    // With no menu open, the only buttons on screen are the top-level menus (exactly these 11)
+    // and the Data View / Variable View tabs at the bottom.
     let h = harness();
     assert_eq!(
         button_labels(&h),
@@ -37,7 +38,9 @@ fn rendered_menu_bar_is_exactly_the_spss_menus() {
             "Utilities",
             "Extensions",
             "Window",
-            "Help"
+            "Help",
+            "Data View",
+            "Variable View"
         ]
     );
 }
@@ -117,8 +120,9 @@ fn top_level_menus_in_spss_order() {
         xs.windows(2).all(|w| w[0] < w[1]),
         "menus not left-to-right: {xs:?}"
     );
-    // The main area shows the (empty) dataset size, the status bar the idle processor.
-    h.get_by_label("0 variables, 0 cases");
+    // The main area shows the empty Data View, the status bar the idle processor.
+    h.get_by_label("Data View");
+    assert!(h.query_all_by_label("var").next().is_some());
     h.get_by_label("Statik Processor is ready");
 }
 
@@ -213,7 +217,9 @@ fn open_via_job_updates_main_area_and_blocks_while_busy() {
     h.state_mut().wait_for_job();
     h.run();
     assert!(h.state().busy().is_none());
-    h.get_by_label("5 variables, 60 cases");
+    // The Data View shows the opened data.
+    h.get_by_label("grp");
+    assert_eq!(h.state().state.doc.ds().n_cases(), 60);
     assert!(
         h.state()
             .state

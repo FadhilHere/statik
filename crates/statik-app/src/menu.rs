@@ -22,6 +22,10 @@ pub enum MenuAction {
     Save,
     /// File > Save As...
     SaveAs,
+    /// Edit > Cut / Copy / Paste (Data View selection; clipboard handled by the app).
+    Cut,
+    Copy,
+    Paste,
     /// Window > Data Editor.
     ShowDataEditor,
     /// Help > About Statik.
@@ -238,21 +242,24 @@ fn edit_menu(ui: &mut Ui, state: &AppState, out: &mut Option<MenuAction>) {
         }
     }
     ui.separator();
-    // Implemented with the Data View (Task 3).
+    item(ui, "Cut", Some("Ctrl+X"), out, || MenuAction::Cut);
+    item(ui, "Copy", Some("Ctrl+C"), out, || MenuAction::Copy);
     off(
         ui,
-        &[
-            "Cut",
-            "Copy",
-            "Copy with Variable Names",
-            "Copy with Variable Labels",
-            "Paste",
-            "Paste Variables...",
-            "Clear",
-        ],
+        &["Copy with Variable Names", "Copy with Variable Labels"],
     );
+    item(ui, "Paste", Some("Ctrl+V"), out, || MenuAction::Paste);
+    off(ui, &["Paste Variables..."]);
+    item(ui, "Clear", Some("Delete"), out, || {
+        MenuAction::Cmd(Command::Clear)
+    });
     ui.separator();
-    off(ui, &["Insert Variable", "Insert Cases"]);
+    item(ui, "Insert Variable", None, out, || {
+        MenuAction::Cmd(Command::InsertVariable)
+    });
+    item(ui, "Insert Cases", None, out, || {
+        MenuAction::Cmd(Command::InsertCases)
+    });
     ui.separator();
     off(
         ui,
