@@ -317,6 +317,8 @@ fn deleted_variable_is_reported_and_nothing_runs() {
         "{}",
         m.text
     );
+    // The stale name is still listed in Independent(s) (struck through, with a tooltip).
+    assert!(h.query_all_by_label("x1").next().is_some());
     assert_eq!(st.dialogs.open, Some(DialogKind::LinearRegression));
 }
 
@@ -586,4 +588,80 @@ fn linear_regression_dialog_fits_800x600() {
         assert!(screen.contains_rect(r), "{l} at {r:?} is clipped");
     }
     h.snapshot("dialog_linear_regression");
+}
+
+/// Double-click `label` in a list (after a pause, so it is not counted as a triple click).
+fn double_click(h: &mut Harness<'_, StatikApp>, label: &str) {
+    h.run_steps(45);
+    let n = node(h, label);
+    n.click();
+    n.click();
+    h.run();
+}
+
+#[test]
+fn paired_double_click_and_no_self_pairs() {
+    let _render = common::render_lock();
+    let mut h = harness();
+    open_menu(&mut h, &["Compare Means", "Paired-Samples T Test..."]);
+    double_click(&mut h, "x1");
+    assert_eq!(
+        h.state().state.dialogs.dialogs.paired.pairs,
+        [(Some("x1".into()), None)]
+    );
+    // x1 cannot complete a pair with itself (SPSS refuses x1 WITH x1).
+    double_click(&mut h, "x1");
+    assert_eq!(
+        h.state().state.dialogs.dialogs.paired.pairs,
+        [(Some("x1".into()), None)]
+    );
+    click(&mut h, "x1");
+    assert!(!enabled(&h, "Move to Paired Variables"));
+    double_click(&mut h, "x2");
+    node(&h, "Pair 1: x1, x2");
+    assert!(enabled(&h, "OK"));
+}
+
+#[test]
+fn independent_groups_must_differ() {
+    let _render = common::render_lock();
+    let mut h = harness();
+    open_menu(&mut h, &["Compare Means", "Independent-Samples T Test..."]);
+    move_var(&mut h, "y", "Test Variable(s)");
+    move_var(&mut h, "grp", "Grouping Variable");
+    click(&mut h, "Define Groups...");
+    type_into(&mut h, "Group 1:", "1");
+    type_into(&mut h, "Group 2:", "1");
+    click(&mut h, "Continue");
+    let m = h.state().state.message().cloned().expect("message");
+    assert!(m.text.contains("must be different"), "{}", m.text);
+    assert_eq!(h.state().state.dialogs.sub, Some("Define Groups..."));
+    h.state_mut().state.dismiss_message();
+    h.run();
+    click(&mut h, "Cancel");
+    assert!(!enabled(&h, "OK"));
+}
+
+#[test]
+fn explore_paste_without_plots_has_no_compare() {
+    use statik_app::dialogs::ProcDialog;
+    let st = skripsi();
+    let mut d = statik_app::dialogs::explore::ExploreDialog::default();
+    d.picker.targets[0].vars.push("y".into());
+    let s = d.syntax(st.doc.ds());
+    assert_eq!(
+        s,
+        "EXAMINE VARIABLES=y
+  /PLOT NONE
+  /STATISTICS DESCRIPTIVES
+  /CINTERVAL 95
+  /MISSING LISTWISE
+  /NOTOTAL."
+    );
+    d.normality = true;
+    assert!(d.syntax(st.doc.ds()).contains(
+        "/PLOT NPPLOT
+  /COMPARE GROUPS
+"
+    ));
 }

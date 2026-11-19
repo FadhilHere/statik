@@ -131,7 +131,20 @@ pub fn ci_options(ui: &mut Ui, conf: &mut String) {
 /// Parse a confidence percentage (strictly between 0 and 100).
 pub fn parse_ci(s: &str) -> Result<f64, String> {
     match crate::edit::parse_number(s.trim()) {
-        Some(c) if c > 0.0 && c < 100.0 => Ok(c),
+        Some(c) if (1.0..=99.99).contains(&c) => Ok(c),
         _ => Err("The confidence interval percentage must be a number between 1 and 99.99.".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ci_range_matches_the_message() {
+        for ok in ["1", "95", "99.99", "99,5"] {
+            assert!(super::parse_ci(ok).is_ok(), "{ok}");
+        }
+        for bad in ["0.5", "0", "99.995", "100", "x", ""] {
+            assert!(super::parse_ci(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -101,6 +101,10 @@ pub struct VarPicker {
     /// Selected names (in the list given by `side`).
     pub selected: Vec<String>,
     anchor: Option<String>,
+    /// The source item double-clicked this frame (set by [`Self::source_ui`]). The picker
+    /// moves it to the first target that accepts it; a dialog without targets (Paired) uses
+    /// this to act on the double-click itself.
+    pub double_clicked: Option<String>,
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -175,6 +179,24 @@ pub fn var_row(
     resp
 }
 
+/// Mark a target row whose variable no longer exists: the text struck through and a tooltip.
+fn stale_mark(ui: &Ui, r: Response, text: &str) -> Response {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let w = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), font, Color32::BLACK)
+        .size()
+        .x;
+    let y = r.rect.center().y;
+    let x0 = r.rect.left() + 21.0;
+    ui.painter().with_clip_rect(r.rect).hline(
+        x0..=(x0 + w).min(r.rect.right()),
+        y,
+        Stroke::new(1.0, Color32::from_rgb(190, 60, 60)),
+    );
+    r.on_hover_text("Variable no longer exists")
+}
+
 /// A small button with a painted triangle (▶ when `right`), named `name` for accessibility.
 pub fn arrow_button(ui: &mut Ui, right: bool, enabled: bool, name: &str) -> bool {
     let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(26.0, 22.0)));
@@ -236,6 +258,40 @@ pub fn list_frame<R>(
         .inner
 }
 
+/// Like [`list_frame`], but only the visible rows of `n` are drawn: `add(ui, range)`.
+pub fn list_frame_rows(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    height: f32,
+    n: usize,
+    add: impl FnOnce(&mut Ui, std::ops::Range<usize>),
+) {
+    let enabled = ui.is_enabled();
+    egui::Frame::new()
+        .fill(if enabled {
+            ui.visuals().extreme_bg_color
+        } else {
+            ui.visuals().faint_bg_color
+        })
+        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .inner_margin(2.0)
+        .show(ui, |ui| {
+            ui.set_min_height(height);
+            ui.set_max_height(height);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            egui::ScrollArea::vertical()
+                .id_salt(id)
+                .auto_shrink([false, false])
+                .min_scrolled_height(height)
+                .max_height(height)
+                .show_rows(ui, ROW_H, n, |ui, range| {
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                        add(ui, range)
+                    });
+                });
+        });
+}
+
 impl VarPicker {
     pub fn new(targets: Vec<Target>) -> Self {
         VarPicker {
@@ -270,24 +326,38 @@ impl VarPicker {
             .any(|t| t.vars.iter().any(|v| same(v, name)))
     }
 
-    /// Names in the source list, in dataset order.
+    /// Names in the source list, in dataset order (one pass over the dataset).
     pub fn source(&self, ds: &Dataset) -> Vec<String> {
+        let used: std::collections::HashSet<String> = if self.keep_source {
+            Default::default()
+        } else {
+            self.targets
+                .iter()
+                .flat_map(|t| t.vars.iter().map(|v| v.to_lowercase()))
+                .collect()
+        };
         (0..ds.n_vars())
             .map(|i| &ds.var(dataset::VarId(i)).name)
-            .filter(|n| self.keep_source || !self.in_targets(n))
+            .filter(|n| used.is_empty() || !used.contains(&n.to_lowercase()))
             .cloned()
             .collect()
     }
 
-    /// The selected names when the selection is in the source list (in dataset order).
+    /// The selected names when the selection is in the source list, in dataset order (only
+    /// the selection is looked at, not the whole list).
     pub fn source_selection(&self, ds: &Dataset) -> Vec<String> {
         if self.side != Side::Source {
             return Vec::new();
         }
-        self.source(ds)
-            .into_iter()
-            .filter(|n| self.selected.iter().any(|s| same(s, n)))
-            .collect()
+        let mut sel: Vec<(usize, String)> = self
+            .selected
+            .iter()
+            .filter(|n| self.keep_source || !self.in_targets(n))
+            .filter_map(|n| ds.find(n).map(|id| (id.0, ds.var(id).name.clone())))
+            .collect();
+        sel.sort_by_key(|(i, _)| *i);
+        sel.dedup_by_key(|(i, _)| *i);
+        sel.into_iter().map(|(_, n)| n).collect()
     }
 
     fn is_selected(&self, side: Side, name: &str) -> bool {
@@ -372,12 +442,13 @@ impl VarPicker {
 
     /// Draw the source list (`size` in points).
     pub fn source_ui(&mut self, ui: &mut Ui, ds: &Dataset, size: Vec2) {
+        self.double_clicked = None;
         let names = self.source(ds);
         let mut clicked: Option<(String, Modifiers, bool)> = None;
         ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(size.x);
-            list_frame(ui, "source", size.y - 4.0, |ui| {
-                for n in &names {
+            list_frame_rows(ui, "source", size.y - 4.0, names.len(), |ui, range| {
+                for n in &names[range] {
                     let var = ds.find(n).map(|id| ds.var(id));
                     let text = var.map(display_name).unwrap_or_else(|| n.clone());
                     let r = var_row(ui, var, &text, self.is_selected(Side::Source, n), true);
@@ -392,7 +463,8 @@ impl VarPicker {
         if let Some((n, mods, double)) = clicked {
             self.click(Side::Source, &n, &names, mods);
             if double {
-                self.selected = vec![n];
+                self.selected = vec![n.clone()];
+                self.double_clicked = Some(n);
                 if let Some(i) = (0..self.targets.len()).find(|&i| self.can_move_to(ds, i)) {
                     self.move_to(ds, i);
                 }
@@ -447,7 +519,11 @@ impl VarPicker {
                 let var = ds.find(n).map(|id| ds.var(id));
                 let mut text = var.map(display_name).unwrap_or_else(|| n.clone());
                 text.push_str(&suffix);
-                let r = var_row(ui, var, &text, self.is_selected(Side::Target(i), n), true);
+                let sel = self.is_selected(Side::Target(i), n);
+                let mut r = var_row(ui, var, &text, sel, true);
+                if var.is_none() {
+                    r = stale_mark(ui, r, &text);
+                }
                 if r.double_clicked() {
                     clicked = Some((n.clone(), Modifiers::NONE, true));
                 } else if r.clicked() {

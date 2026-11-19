@@ -105,7 +105,7 @@ impl ProcDialog for ExploreDialog {
         } else {
             "PLOT NONE"
         })
-        .subcommand_if(self.display == Display::Both, "COMPARE GROUPS")
+        .subcommand_if(self.plots(), "COMPARE GROUPS")
         .subcommand("STATISTICS DESCRIPTIVES")
         .subcommand("CINTERVAL 95")
         .subcommand("MISSING LISTWISE")

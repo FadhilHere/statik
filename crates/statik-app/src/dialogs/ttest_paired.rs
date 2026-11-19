@@ -47,6 +47,18 @@ impl PairedDialog {
                 ds.find(n)
                     .is_some_and(|id| Eligible::Numeric.accepts(ds.var(id)))
             })
+            && !self.would_pair_with_itself(&sel)
+    }
+
+    /// One variable selected that would complete a pair with itself (SPSS refuses x1 WITH x1).
+    fn would_pair_with_itself(&self, sel: &[String]) -> bool {
+        sel.len() == 1
+            && self.pairs.last().is_some_and(|p| {
+                p.1.is_none()
+                    && p.0
+                        .as_deref()
+                        .is_some_and(|a| a.eq_ignore_ascii_case(&sel[0]))
+            })
     }
 
     /// Add the source selection to the grid.
@@ -173,6 +185,10 @@ impl ProcDialog for PairedDialog {
         }
         ui.horizontal_top(|ui| {
             self.picker.source_ui(ui, ds, vec2(200.0, 260.0));
+            // No targets in the picker: a double-click adds the variable to the grid here.
+            if self.picker.double_clicked.take().is_some() {
+                self.add(ds);
+            }
             ui.vertical(|ui| {
                 ui.add_space(40.0);
                 if let Some(r) = self.selected_pair {

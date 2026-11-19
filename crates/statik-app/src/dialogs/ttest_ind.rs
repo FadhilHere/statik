@@ -87,7 +87,7 @@ impl ProcDialog for IndependentDialog {
     fn ready(&self) -> bool {
         !self.picker.vars(TEST).is_empty()
             && !self.picker.vars(GROUP).is_empty()
-            && self.groups().is_some()
+            && self.groups().is_some_and(|(a, b)| a != b)
     }
 
     fn options(&self, ds: &Dataset) -> Result<RunSpec, String> {
@@ -97,6 +97,9 @@ impl ProcDialog for IndependentDialog {
             .first()
             .ok_or("A grouping variable is required.")?;
         let (group1, group2) = self.groups().ok_or("Define the two groups first.")?;
+        if group1 == group2 {
+            return Err("Group 1 and Group 2 must be different values.".into());
+        }
         let o = IndependentOptions {
             test_vars: resolve(ds, self.picker.vars(TEST), Eligible::Numeric)?,
             grouping: resolve_one(ds, g, Eligible::Numeric)?,
@@ -150,6 +153,9 @@ impl ProcDialog for IndependentDialog {
         match name {
             "Define Groups..." if self.groups().is_none() => {
                 Err("Enter a numeric value for Group 1 and for Group 2.".into())
+            }
+            "Define Groups..." if self.groups().is_some_and(|(a, b)| a == b) => {
+                Err("Group 1 and Group 2 must be different values.".into())
             }
             "Options..." => parse_ci(&self.conf).map(|_| ()),
             _ => Ok(()),
