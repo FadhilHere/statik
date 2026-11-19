@@ -473,6 +473,8 @@ fn import_excel_dialog() {
     h.state_mut()
         .state
         .open_import_excel(fixture("data/sample.xlsx"));
+    // The sheet names are read in the background.
+    h.state_mut().state.poll_import(true);
     h.run();
     node(&h, "Read Excel File");
     let Some(ImportDialog::Excel(d)) = &h.state().state.import else {
@@ -519,4 +521,63 @@ fn compute_dialog_fits_800x600() {
         assert!(screen.contains_rect(r), "{l} at {r:?} is clipped");
     }
     h.snapshot("dialog_compute_variable");
+}
+
+#[test]
+fn import_excel_unreadable_workbook_closes_with_message() {
+    let mut s = AppState::new();
+    s.open_import_excel(fixture("data/indo_semicolon.csv"));
+    assert!(s.import.is_some());
+    s.poll_import(true);
+    assert!(s.import.is_none());
+    let m = s.message().expect("an error message");
+    assert!(m.text.contains("Cannot read"), "{}", m.text);
+}
+
+#[test]
+fn compute_condition_error_opens_if_with_cursor() {
+    let _render = common::render_lock();
+    let mut h = harness(skripsi());
+    open_menu(&mut h, "Transform", &["Compute Variable..."]);
+    let d = &mut h.state_mut().state.dialogs.dialogs.compute;
+    d.target = "z".into();
+    d.expr.text = "1".into();
+    d.use_if = true;
+    d.cond.text = "grp = = 2".into();
+    h.run();
+    click(&mut h, "OK");
+    let st = &h.state().state;
+    assert!(
+        st.message().unwrap().text.contains("character 7"),
+        "{:?}",
+        st.message()
+    );
+    assert_eq!(st.dialogs.sub, Some("If..."));
+    assert!(st.pending_job.is_none());
+    h.state_mut().state.dismiss_message();
+    h.run();
+    node(&h, "Compute Variable: If Cases");
+    assert_eq!(compute(&h).cond.selection(), (6, 6));
+}
+
+#[test]
+fn transform_conflicting_with_an_edit_adds_no_log() {
+    let mut s = skripsi();
+    assert!(s.dialogs.open(DialogKind::Compute));
+    let d = &mut s.dialogs.dialogs.compute;
+    d.target = "z".into();
+    d.expr.text = "x1 + 1".into();
+    assert!(statik_app::dialogs::ok(&mut s));
+    let job = s.pending_job.take().unwrap();
+    // The data is edited while the job runs.
+    s.doc
+        .ds_mut()
+        .set_numeric(dataset::VarId(0), 0, 99.0)
+        .unwrap();
+    let outs = s.outputs.len();
+    s.finish(job.run_inline()).unwrap();
+    assert_eq!(s.outputs.len(), outs);
+    assert!(s.doc.ds().find("z").is_none());
+    assert_eq!(s.message().unwrap().title, "Data changed");
+    assert!(!s.can_undo());
 }

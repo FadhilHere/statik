@@ -12,7 +12,7 @@ mod records;
 mod write;
 mod xlsx_import;
 
-pub use csv_import::{CsvOptions, CsvPreview, import_csv, sniff_csv};
+pub use csv_import::{CsvOptions, CsvPreview, SNIFF_BYTES, csv_prefix, import_csv, sniff_csv, sniff_csv_text};
 pub use names::sanitize_name;
 pub use read::read_sav;
 pub use write::write_sav;

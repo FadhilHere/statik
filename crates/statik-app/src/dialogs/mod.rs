@@ -298,8 +298,11 @@ pub fn ok(state: &mut AppState) -> bool {
         // target is only changed after "Change existing variable?" was answered Yes.
         let confirmed = std::mem::take(&mut state.dialogs.confirmed);
         match state.dialogs.dialogs.compute.check(state.doc.ds()) {
-            Err(e) => {
+            Err((e, in_condition)) => {
                 state.push_message(Message::warning(kind.title(), e));
+                if in_condition {
+                    state.dialogs.open_sub(compute::IF);
+                }
                 return false;
             }
             Ok(true) if !confirmed => {

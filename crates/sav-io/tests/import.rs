@@ -1,5 +1,8 @@
 use dataset::{Column, Dataset, VarId, VarType};
-use sav_io::{CsvOptions, SavError, import_csv, import_xlsx, open_any, sanitize_name, sniff_csv, xlsx_sheet_names};
+use sav_io::{
+    CsvOptions, SNIFF_BYTES, SavError, csv_prefix, import_csv, import_xlsx, open_any, sanitize_name, sniff_csv,
+    sniff_csv_text, xlsx_sheet_names,
+};
 use std::path::PathBuf;
 
 fn fixture(rel: &str) -> PathBuf {
@@ -308,6 +311,41 @@ fn sniff_csv_reports_detection_and_first_rows() {
     assert_eq!(pv.delimiter, b';');
     assert!(pv.decimal_comma);
     assert_eq!(pv.raw_header, ["a,b"]);
+}
+
+#[test]
+fn sniff_csv_reads_only_a_bounded_prefix() {
+    // ~3 MB of valid rows (with a quoted field holding a line break and a multi-byte character),
+    // then a malformed tail: the preview reads only the first SNIFF_BYTES and succeeds; the full
+    // import still checks the whole file.
+    let mut text = String::from("nama;nilai\n");
+    let mut i = 0;
+    while text.len() < 3 * SNIFF_BYTES {
+        text.push_str(&format!("\"Siswa é\n{i}\";{i},5\n"));
+        i += 1;
+    }
+    text.push_str("too;many;fields\n");
+    let p = temp_csv("sniff_big.csv", text.as_bytes());
+    let pv = sniff_csv(&p, &auto(), 10).unwrap();
+    assert_eq!(pv.delimiter, b';');
+    assert!(pv.decimal_comma);
+    assert_eq!(pv.rows.len(), 10);
+    assert_eq!(pv.rows[0], ["Siswa é\n0", "0,5"]);
+    assert!(import_csv(&p, &auto()).is_err());
+
+    // The prefix ends with a complete record, never inside a quoted field or a character.
+    let pre = csv_prefix(&p, SNIFF_BYTES).unwrap();
+    assert!(pre.len() <= SNIFF_BYTES);
+    assert!(pre.ends_with(",5\n"), "{:?}", &pre[pre.len() - 20..]);
+    for cut in [SNIFF_BYTES - 1, SNIFF_BYTES - 7, 1000, 1001, 1002, 1003] {
+        let pre = csv_prefix(&p, cut).unwrap();
+        assert!(pre.ends_with(",5\n"), "cut {cut}");
+        let pv = sniff_csv_text(&pre, &auto(), usize::MAX).unwrap();
+        assert!(pv.rows.iter().all(|r| r.len() == 2));
+    }
+    // A small file is read whole.
+    let small = csv_prefix(&fixture("data/indo_semicolon.csv"), SNIFF_BYTES).unwrap();
+    assert!(small.trim_end().ends_with("1;;20"), "{small:?}");
 }
 
 #[test]

@@ -302,9 +302,12 @@ struct Parsed {
 }
 
 fn parse_file(path: &Path, opt: &CsvOptions) -> Result<Parsed, SavError> {
-    let text = decode(&std::fs::read(path)?);
-    let delim = opt.delimiter.map_or_else(|| detect_delimiter(&text), char::from);
-    let mut recs = parse_records(&text, delim, None)?;
+    parse_text(&decode(&std::fs::read(path)?), opt)
+}
+
+fn parse_text(text: &str, opt: &CsvOptions) -> Result<Parsed, SavError> {
+    let delim = opt.delimiter.map_or_else(|| detect_delimiter(text), char::from);
+    let mut recs = parse_records(text, delim, None)?;
     let Some((_, first)) = recs.first() else {
         return Err(SavError::Csv("the file is empty".into()));
     };
@@ -350,10 +353,86 @@ pub struct CsvPreview {
     pub rows: Vec<Vec<String>>,
 }
 
+/// Bytes of a file [`sniff_csv`] looks at.
+pub const SNIFF_BYTES: usize = 1 << 20;
+
+/// The first `max_bytes` bytes of a CSV file, decoded like [`import_csv`] does and cut after the last
+/// complete record (never inside a quoted field or a character). A file no longer than `max_bytes` is
+/// returned whole. Used for previews, so a huge file is never read completely on the UI thread.
+pub fn csv_prefix(path: &Path, max_bytes: usize) -> Result<String, SavError> {
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(max_bytes.min(1 << 24) + 1);
+    std::fs::File::open(path)?.take(max_bytes as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() <= max_bytes {
+        return Ok(decode(&buf));
+    }
+    buf.truncate(max_bytes);
+    let mut text = decode_prefix(&buf);
+    let end = last_record_end(&text);
+    if end > 0 {
+        text.truncate(end);
+    }
+    Ok(text)
+}
+
+/// Decode a cut-off byte prefix: an incomplete character at the end is dropped.
+fn decode_prefix(bytes: &[u8]) -> String {
+    let utf16 = bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]);
+    if utf16 {
+        let n = bytes.len() & !1;
+        return decode(&bytes[..n]).trim_end_matches('\u{FFFD}').to_string();
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(body) {
+        Err(e) if e.error_len().is_none() => decode(&bytes[..bytes.len() - (body.len() - e.valid_up_to())]),
+        _ => decode(bytes),
+    }
+}
+
+/// Byte offset just after the last line break that ends a record (outside quotes). A quote opens a
+/// quoted field only at the start of a field; `,` `;` and tab all count as field separators here.
+fn last_record_end(text: &str) -> usize {
+    let mut end = 0;
+    let (mut in_quotes, mut field_start) = (false, true);
+    let mut it = text.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        if in_quotes {
+            if c == '"' {
+                if it.peek().is_some_and(|&(_, n)| n == '"') {
+                    it.next();
+                } else {
+                    in_quotes = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '"' if field_start => {
+                in_quotes = true;
+                field_start = false;
+            }
+            '\n' => {
+                end = i + 1;
+                field_start = true;
+            }
+            ',' | ';' | '\t' | '\r' => field_start = true,
+            _ => field_start = false,
+        }
+    }
+    end
+}
+
 /// Parse a CSV file like [`import_csv`] and report the detected settings, the variable names and the
-/// first `max_rows` data rows. Errors are the same as [`import_csv`]'s.
+/// first `max_rows` data rows. Only the first [`SNIFF_BYTES`] of the file are read ([`csv_prefix`]), so
+/// detection is based on them and an error later in the file is only found by [`import_csv`].
 pub fn sniff_csv(path: &Path, opt: &CsvOptions, max_rows: usize) -> Result<CsvPreview, SavError> {
-    let p = parse_file(path, opt)?;
+    sniff_csv_text(&csv_prefix(path, SNIFF_BYTES)?, opt, max_rows)
+}
+
+/// [`sniff_csv`] on text already read (e.g. a [`csv_prefix`] kept by an import dialog, re-parsed
+/// whenever an option changes).
+pub fn sniff_csv_text(text: &str, opt: &CsvOptions, max_rows: usize) -> Result<CsvPreview, SavError> {
+    let p = parse_text(text, opt)?;
     Ok(CsvPreview {
         delimiter: u8::try_from(p.delim).unwrap_or(0),
         decimal_comma: p.decimal_comma,

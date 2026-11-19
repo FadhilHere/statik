@@ -754,6 +754,14 @@ impl AppState {
                             // across it.
                             None => self.clear_undo(),
                         }
+                    } else if undo.is_some() {
+                        // A transformation only changes data: nothing ran, so no log entry.
+                        self.push_message(Message::warning(
+                            "Data changed",
+                            "The data was edited while the transformation was running, so it \
+                             was not applied. Run it again.",
+                        ));
+                        return Ok(());
                     } else {
                         self.push_message(Message::warning(
                             "Data changed",

@@ -5,8 +5,9 @@
 //! - **Read CSV File:** a preview of the first 10 rows (variable names as they will be
 //!   created, cells as in the file), "First line contains variable names", Delimiter between
 //!   values (Auto / Comma / Semicolon / Tab) and Decimal Symbol (Auto / Period / Comma). The
-//!   preview is read again whenever an option changes ([`sav_io::sniff_csv`]) and shows what
-//!   Auto detected.
+//!   start of the file (at most `sav_io::SNIFF_BYTES`) is read once when the dialog opens and
+//!   parsed again in memory whenever an option changes ([`sav_io::sniff_csv_text`]); the
+//!   preview shows what Auto detected there. The whole file is only read by OK's job.
 //! - **Read Excel File:** the worksheet and "Read variable names from the first row of data".
 //!
 //! OK reads the file on the worker thread (the document is replaced, the undo history
@@ -18,6 +19,7 @@ use crate::state::{AppState, Message, csv_job, quoted_path, xlsx_job, xlsx_synta
 use egui::{Context, Ui, vec2};
 use sav_io::{CsvOptions, CsvPreview};
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 /// Rows shown in the CSV preview.
 pub const PREVIEW_ROWS: usize = 10;
@@ -92,11 +94,16 @@ pub struct CsvDialog {
     /// The preview for the current options (`Err` = why the file cannot be read like this).
     pub preview: Option<Result<CsvPreview, String>>,
     preview_for: Option<(bool, Delimiter, Decimal)>,
+    /// The start of the file (at most `sav_io::SNIFF_BYTES`, read once when the dialog opens);
+    /// the preview re-parses it in memory when an option changes.
+    head: Result<String, String>,
 }
 
 impl CsvDialog {
     pub fn new(path: PathBuf) -> Self {
+        let head = sav_io::csv_prefix(&path, sav_io::SNIFF_BYTES).map_err(|e| e.to_string());
         let mut d = CsvDialog {
+            head,
             path,
             header: true,
             delimiter: Delimiter::Auto,
@@ -123,9 +130,10 @@ impl CsvDialog {
             return;
         }
         self.preview_for = Some(key);
-        self.preview = Some(
-            sav_io::sniff_csv(&self.path, &self.options(), PREVIEW_ROWS).map_err(|e| e.to_string()),
-        );
+        let opt = self.options();
+        self.preview = Some(self.head.as_ref().map_err(Clone::clone).and_then(|t| {
+            sav_io::sniff_csv_text(t, &opt, PREVIEW_ROWS).map_err(|e| e.to_string())
+        }));
     }
 
     /// GET DATA syntax (SPSS style) for the current options, with the delimiter and decimal
@@ -263,17 +271,76 @@ impl CsvDialog {
 }
 
 /// The Read Excel File dialog.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExcelDialog {
     pub path: PathBuf,
+    /// Worksheet names; empty while they are being read.
     pub sheets: Vec<String>,
     /// Index into `sheets`.
     pub sheet: usize,
     /// "Read variable names from the first row of data".
     pub header: bool,
+    /// The sheet names are read on a background thread: opening a workbook parses its whole
+    /// shared-string table (calamine), which takes a while for big workbooks.
+    loading: Option<mpsc::Receiver<Result<Vec<String>, String>>>,
+}
+
+/// Read the sheet names of `path` (an error message when unreadable or without sheets).
+fn sheet_names(path: &std::path::Path) -> Result<Vec<String>, String> {
+    match sav_io::xlsx_sheet_names(path) {
+        Ok(s) if !s.is_empty() => Ok(s),
+        Ok(_) => Err(format!("{} has no worksheets.", path.display())),
+        Err(e) => Err(format!("Cannot read {}:\n{e}", path.display())),
+    }
 }
 
 impl ExcelDialog {
+    fn new(path: PathBuf) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let p = path.clone();
+        let spawned = std::thread::Builder::new()
+            .name("statik-sheets".into())
+            .spawn(move || {
+                let _ = tx.send(sheet_names(&p));
+            });
+        let mut d = ExcelDialog {
+            path,
+            sheets: Vec::new(),
+            sheet: 0,
+            header: true,
+            loading: Some(rx),
+        };
+        if spawned.is_err() {
+            // No thread: read them here.
+            let (tx, rx) = mpsc::channel();
+            let _ = tx.send(sheet_names(&d.path));
+            d.loading = Some(rx);
+        }
+        d
+    }
+
+    /// The sheet names are still being read.
+    pub fn loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
+    /// Take the sheet names if they arrived (`block` = wait for them). `Some(Err)` = the
+    /// workbook cannot be read.
+    fn poll(&mut self, block: bool) -> Option<Result<(), String>> {
+        let rx = self.loading.as_ref()?;
+        let lost = || Err("Internal error: the workbook could not be read.".to_string());
+        let r = if block {
+            rx.recv().unwrap_or_else(|_| lost())
+        } else {
+            match rx.try_recv() {
+                Ok(r) => r,
+                Err(mpsc::TryRecvError::Empty) => return None,
+                Err(mpsc::TryRecvError::Disconnected) => lost(),
+            }
+        };
+        self.loading = None;
+        Some(r.map(|s| self.sheets = s))
+    }
     fn sheet_name(&self) -> Option<String> {
         self.sheets.get(self.sheet).cloned()
     }
@@ -285,6 +352,12 @@ impl ExcelDialog {
     fn ui(&mut self, ui: &mut Ui) {
         ui.label(format!("File: {}", self.path.display()));
         ui.add_space(6.0);
+        if self.loading() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Reading the workbook...");
+            });
+        }
         egui::Grid::new("xlsx_options").show(ui, |ui| {
             ui.label("Worksheet:");
             let current = self.sheet_name().unwrap_or_default();
@@ -312,7 +385,7 @@ impl ExcelDialog {
 }
 
 /// The open import dialog.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum ImportDialog {
     Csv(CsvDialog),
     Excel(ExcelDialog),
@@ -361,27 +434,23 @@ impl AppState {
         self.import = Some(ImportDialog::Csv(CsvDialog::new(path)));
     }
 
-    /// File ▸ Import Data ▸ Excel... after the file was picked: open Read Excel File (an
-    /// unreadable workbook gives an error message instead).
+    /// File ▸ Import Data ▸ Excel... after the file was picked: open Read Excel File. The
+    /// sheet names are read in the background ([`Self::poll_import`]); an unreadable workbook
+    /// closes the dialog with an error message.
     pub fn open_import_excel(&mut self, path: PathBuf) {
         self.commit_pending_edits();
-        match sav_io::xlsx_sheet_names(&path) {
-            Ok(sheets) if !sheets.is_empty() => {
-                self.import = Some(ImportDialog::Excel(ExcelDialog {
-                    path,
-                    sheets,
-                    sheet: 0,
-                    header: true,
-                }));
-            }
-            Ok(_) => self.push_message(Message::error(format!(
-                "{} has no worksheets.",
-                path.display()
-            ))),
-            Err(e) => self.push_message(Message::error(format!(
-                "Cannot read {}:\n{e}",
-                path.display()
-            ))),
+        self.import = Some(ImportDialog::Excel(ExcelDialog::new(path)));
+    }
+
+    /// Pick up the Excel sheet names once read (`block` = wait for them; tests). Called by
+    /// [`show_import`] every frame.
+    pub fn poll_import(&mut self, block: bool) {
+        let Some(ImportDialog::Excel(x)) = &mut self.import else {
+            return;
+        };
+        if let Some(Err(e)) = x.poll(block) {
+            self.import = None;
+            self.push_message(Message::error(e));
         }
     }
 
@@ -408,9 +477,13 @@ impl AppState {
 
 /// Draw the open import dialog and act on its buttons.
 pub fn show_import(ctx: &Context, state: &mut AppState, busy: bool) {
+    state.poll_import(false);
     let Some(d) = &mut state.import else {
         return;
     };
+    if matches!(d, ImportDialog::Excel(x) if x.loading()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
     let message = state.messages.front().is_some();
     let title = d.title();
     let screen = ctx.content_rect();

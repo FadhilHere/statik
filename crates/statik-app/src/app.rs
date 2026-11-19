@@ -112,6 +112,7 @@ impl StatikApp {
         match action {
             MenuAction::Cmd(c) => self.dispatch(c, ctx),
             MenuAction::OpenData => {
+                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
                 let mut d = rfd::FileDialog::new().set_title("Open Data");
                 for (name, ext) in OPEN_FILTERS {
                     d = d.add_filter(name, ext);
@@ -121,6 +122,7 @@ impl StatikApp {
                 }
             }
             MenuAction::ImportCsv => {
+                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
                 let d = rfd::FileDialog::new()
                     .set_title("Open CSV Data")
                     .add_filter("CSV (*.csv;*.txt)", &["csv", "txt"]);
@@ -129,6 +131,7 @@ impl StatikApp {
                 }
             }
             MenuAction::ImportExcel => {
+                // TODO(Task 7): confirm unsaved changes ("Save changes?") before replacing the data.
                 let d = rfd::FileDialog::new()
                     .set_title("Open Excel File")
                     .add_filter("Excel (*.xlsx;*.xls)", &["xlsx", "xls"]);

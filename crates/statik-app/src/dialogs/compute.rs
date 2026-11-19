@@ -289,15 +289,22 @@ impl ComputeDialog {
     }
 
     /// Check before OK: on a syntax error the cursor is put at the error. `Ok(true)` = the
-    /// target exists (ask before changing it).
-    pub fn check(&mut self, ds: &Dataset) -> Result<bool, String> {
+    /// target exists (ask before changing it). `Err((message, in_condition))`: the error is in
+    /// the If condition when `in_condition` (the caller opens the If sub-dialog).
+    pub fn check(&mut self, ds: &Dataset) -> Result<bool, (String, bool)> {
         self.check_inner(ds).map_err(|e| {
-            match e.at {
-                Some((false, i)) => self.expr.select(i, i),
-                Some((true, i)) => self.cond.select(i, i),
-                None => {}
-            }
-            e.message
+            let in_cond = match e.at {
+                Some((false, i)) => {
+                    self.expr.select(i, i);
+                    false
+                }
+                Some((true, i)) => {
+                    self.cond.select(i, i);
+                    true
+                }
+                None => false,
+            };
+            (e.message, in_cond)
         })
     }
 
