@@ -370,3 +370,181 @@ fn selection_commands() {
     };
     assert_eq!(t, &["q", "r"]);
 }
+
+// ----- fix round 1 -----
+
+#[test]
+fn paste_far_past_the_last_variable() {
+    // Empty dataset, cursor on the third grey "var" column.
+    let mut s = AppState::new();
+    assert!(s.paste_text(0, 2, "5"));
+    let ds = s.doc.ds();
+    assert_eq!(ds.n_vars(), 3);
+    assert_eq!(ds.var(VarId(2)).name, "VAR00003");
+    assert_eq!(num(&s, 2), vec![5.0]);
+    // Non-empty dataset: two columns past the last variable, two cells wide.
+    let mut s = small();
+    assert!(s.paste_text(0, 4, "5\t6"));
+    assert_eq!(s.doc.ds().n_vars(), 6);
+    assert_eq!(s.doc.ds().var(VarId(5)).name, "VAR00004");
+    assert!(same(&num(&s, 4), &[5.0, f64::NAN]));
+    assert!(same(&num(&s, 5), &[6.0, f64::NAN]));
+    s.undo();
+    assert_eq!(s.doc.ds().n_vars(), 2);
+    // A rejected paste names the variable the column would have become.
+    assert!(!s.paste_text(0, 3, "1\tx"));
+    assert!(
+        s.message().unwrap().text.contains("VAR00003"),
+        "{:?}",
+        s.message()
+    );
+    assert_eq!(s.doc.ds().n_vars(), 2);
+}
+
+#[test]
+fn every_action_with_the_selection_in_the_grey_area() {
+    for kind in 0..3 {
+        let mut s = small();
+        match kind {
+            0 => s.editor.select_cells((10, 10), (12, 14)),
+            1 => s.editor.select_vars(7, 9),
+            _ => s.editor.select_cases(20, 25),
+        }
+        let _ = s.copy_selection();
+        s.apply(Command::Clear).unwrap();
+        s.apply(Command::InsertVariable).unwrap();
+        s.apply(Command::InsertCases).unwrap();
+        s.paste_at_cursor("1\t2\n3\t4");
+        s.paste_at_cursor("8");
+        let (r, c) = s.editor.cursor;
+        s.set_cell_text(r, c, "9");
+        s.set_cell_text(r + 3, c + 3, "9");
+        s.apply(Command::Clear).unwrap();
+        while s.undo() {}
+        assert_eq!(s.doc.ds().n_vars(), 2, "kind {kind}");
+        assert_eq!(s.doc.ds().n_cases(), 2, "kind {kind}");
+        s.editor.view = statik_app::editor::View::Variable;
+        s.editor.var_row = 50;
+        s.apply(Command::Clear).unwrap();
+        s.apply(Command::InsertVariable).unwrap();
+        assert!(s.create_variable(60, "late"));
+    }
+}
+
+#[test]
+fn block_clear_and_paste_revert_exactly() {
+    let mut s = small();
+    s.set_cell_text(1, 0, "");
+    let before = format!("{:?}", s.doc.ds());
+    assert!(s.clear_cells(0..2, 0..2));
+    assert!(num(&s, 0).iter().all(|v| v.is_nan()));
+    assert_eq!(s.undo_len(), 2);
+    s.undo();
+    assert_eq!(format!("{:?}", s.doc.ds()), before);
+    s.redo();
+    s.undo();
+    assert!(s.paste_text(0, 0, "4\tq\n\tr"));
+    s.undo();
+    assert_eq!(format!("{:?}", s.doc.ds()), before);
+}
+
+#[test]
+fn large_block_is_one_compact_op() {
+    let mut s = AppState::new();
+    let ds = s.doc.ds_mut();
+    for j in 0..5 {
+        let col: Vec<f64> = (0..100_000).map(|i| (i * 5 + j) as f64).collect();
+        ds.add_variable(Variable::numeric(&format!("v{j}")), Column::Numeric(col))
+            .unwrap();
+    }
+    let before: Vec<Vec<f64>> = (0..5).map(|j| num(&s, j)).collect();
+    let t = std::time::Instant::now();
+    assert!(s.clear_cells(0..100_000, 0..5));
+    assert!(s.undo());
+    assert_eq!((0..5).map(|j| num(&s, j)).collect::<Vec<_>>(), before);
+    // Paste of a 100,000 x 5 block.
+    let text: String = (0..100_000).map(|i| format!("{i}\t1\t2\t3\t4\n")).collect();
+    assert!(s.paste_text(0, 0, &text));
+    assert_eq!(num(&s, 0)[99_999], 99_999.0);
+    assert!(s.undo());
+    assert_eq!((0..5).map(|j| num(&s, j)).collect::<Vec<_>>(), before);
+    assert!(
+        t.elapsed().as_secs_f64() < 10.0,
+        "block ops too slow: {:?}",
+        t.elapsed()
+    );
+    assert_eq!(s.undo_len(), 0);
+}
+
+#[test]
+fn clipboard_quotes_and_trailing_tabs() {
+    use statik_app::edit::parse_clipboard;
+    assert_eq!(
+        parse_clipboard("\"a\tb\"\t1\r\n\"x\"\"y\nz\"\t2\r\n"),
+        vec![vec!["a\tb", "1"], vec!["x\"y\nz", "2"]]
+    );
+    assert_eq!(parse_clipboard("5\" pipe\t1"), vec![vec!["5\" pipe", "1"]]);
+    assert_eq!(parse_clipboard(""), Vec::<Vec<String>>::new());
+    assert_eq!(parse_clipboard("a\t\n"), vec![vec!["a", ""]]);
+    // A trailing tab on each row does not create a variable.
+    let mut s = small();
+    assert!(s.paste_text(0, 0, "1\tx\t\n2\ty\t\n"));
+    assert_eq!(s.doc.ds().n_vars(), 2);
+    // A quoted cell with a line break stays one string cell.
+    s.change_variable(1, |_| {});
+    assert!(s.set_variable_type(1, VarType::String { width: 20 }, 20, 0));
+    assert!(s.paste_text(0, 1, "\"two\nlines\""));
+    assert_eq!(display_value(s.doc.ds(), 1, 0, false), "two\nlines");
+    assert_eq!(s.doc.ds().n_cases(), 2);
+}
+
+#[test]
+fn single_value_fills_the_selection() {
+    let mut s = small();
+    s.editor.select_cells((0, 0), (2, 0)); // rows 0..=2: one past the data
+    assert!(s.paste_at_cursor("7"));
+    assert_eq!(num(&s, 0), vec![7.0, 7.0, 7.0]);
+    assert_eq!(s.undo_len(), 1);
+    s.undo();
+    assert_eq!(num(&s, 0), vec![1.0, 2.0]);
+}
+
+#[test]
+fn pending_cell_edit_is_committed_before_commands() {
+    let mut s = small();
+    s.editor.select_cases(0, 0);
+    s.editor.editing = Some(statik_app::editor::CellEdit {
+        row: 0,
+        col: 0,
+        text: "9".into(),
+        from_typing: true,
+        focused: true,
+    });
+    s.apply(Command::InsertCases).unwrap();
+    assert!(s.editor.editing.is_none());
+    assert!(same(&num(&s, 0), &[f64::NAN, 9.0, 2.0]), "{:?}", num(&s, 0));
+    // A pending Variable View edit too.
+    s.editor.var_edit = Some(statik_app::editor::VarEdit {
+        row: 0,
+        field: statik_app::editor::VarField::Label,
+        text: "Age".into(),
+        focused: true,
+    });
+    s.apply(Command::Undo).unwrap(); // commits the label, then undoes it
+    assert_eq!(s.doc.ds().var(VarId(0)).label, None);
+    assert_eq!(s.doc.ds().n_cases(), 3);
+}
+
+#[test]
+fn deleted_variable_drops_and_undo_restores_ui_properties() {
+    use statik_app::editor::{Align, Role};
+    let mut s = small();
+    s.editor.set_align("a", Align::Center);
+    s.editor.set_role("a", Role::Target);
+    s.delete_variables(0..1);
+    assert_eq!(s.editor.props("a"), Default::default());
+    s.undo();
+    let v = s.doc.ds().var(VarId(0)).clone();
+    assert_eq!(s.editor.align(&v), Align::Center);
+    assert_eq!(s.editor.role(&v), Role::Target);
+}

@@ -10,7 +10,7 @@
 //!
 //! The `AppState` methods here never panic on bad input: invalid text or names queue an SPSS-like
 //! message and leave the data unchanged (they return `false`).
-use crate::editor::{SelKind, View};
+use crate::editor::{SelKind, UiProps, View};
 use crate::state::{AppState, Message};
 use dataset::{
     Column, Dataset, DatasetError, MissingSpec, VarId, VarType, Variable, truncate_bytes,
@@ -68,6 +68,15 @@ pub enum EditOp {
         old: CellValue,
         new: CellValue,
     },
+    /// A block of cells `row..row + n` x `col..col + old.len()` set at once (paste, clear).
+    /// `old` / `new` hold one column slice per variable (8 bytes per numeric cell), so large
+    /// blocks stay cheap to keep on the undo stack.
+    SetBlock {
+        row: usize,
+        col: usize,
+        old: Vec<Column>,
+        new: Vec<Column>,
+    },
     /// `count` blank cases inserted before case `at`.
     InsertCase { at: usize, count: usize },
     /// Cases `at..at + count` deleted; `values` holds their values, one column per variable.
@@ -81,12 +90,14 @@ pub enum EditOp {
         var: Box<Variable>,
         col: Column,
     },
-    /// Variable `at` deleted, with its column; `weight` = it was the weight variable.
+    /// Variable `at` deleted, with its column; `weight` = it was the weight variable; `ui` =
+    /// its UI-side Align/Role/Columns (dropped on delete, restored on undo).
     DeleteVar {
         at: usize,
         var: Box<Variable>,
         col: Column,
         weight: bool,
+        ui: UiProps,
     },
     /// Properties of variable `at` changed. For a type change `cols` holds the column before
     /// and after (the variable is replaced as a whole); `weight` = it was the weight variable
@@ -136,6 +147,7 @@ impl EditOp {
     pub fn apply(&self, ds: &mut Dataset) -> Result<(), DatasetError> {
         match self {
             EditOp::SetCell { var, row, new, .. } => new.set(ds, *var, *row),
+            EditOp::SetBlock { row, col, new, .. } => write_block(ds, *row, *col, new),
             EditOp::InsertCase { at, count } => {
                 if *at > ds.n_cases() || ds.n_vars() == 0 {
                     return Err(DatasetError::OutOfRange(*at));
@@ -169,6 +181,7 @@ impl EditOp {
     pub fn revert(&self, ds: &mut Dataset) -> Result<(), DatasetError> {
         match self {
             EditOp::SetCell { var, row, old, .. } => old.set(ds, *var, *row),
+            EditOp::SetBlock { row, col, old, .. } => write_block(ds, *row, *col, old),
             EditOp::InsertCase { at, count } => {
                 if *count == 0 {
                     return Ok(());
@@ -202,6 +215,7 @@ impl EditOp {
                 var,
                 col,
                 weight,
+                ..
             } => {
                 ds.insert_variable(*at, (**var).clone(), col.clone())?;
                 if *weight {
@@ -230,13 +244,27 @@ impl EditOp {
         }
     }
 
-    /// Variables renamed by this op, as `(old name, new name)` when applied.
-    fn renames(&self, out: &mut Vec<(String, String)>) {
+    /// Keep the UI-side variable properties in step with this op (`forward` = applied,
+    /// else reverted): follow renames, drop the entries of deleted variables and restore them
+    /// on undo.
+    fn sync_ui(&self, editor: &mut crate::editor::EditorState, forward: bool) {
         match self {
             EditOp::ChangeVarProp { old, new, .. } if old.name != new.name => {
-                out.push((old.name.clone(), new.name.clone()));
+                if forward {
+                    editor.rename_key(&old.name, &new.name);
+                } else {
+                    editor.rename_key(&new.name, &old.name);
+                }
             }
-            EditOp::Group(ops) => ops.iter().for_each(|o| o.renames(out)),
+            EditOp::DeleteVar { var, ui, .. } => {
+                if forward {
+                    editor.take_props(&var.name);
+                } else {
+                    editor.restore_props(&var.name, ui.clone());
+                }
+            }
+            EditOp::Group(ops) if forward => ops.iter().for_each(|o| o.sync_ui(editor, true)),
+            EditOp::Group(ops) => ops.iter().rev().for_each(|o| o.sync_ui(editor, false)),
             _ => {}
         }
     }
@@ -249,6 +277,30 @@ impl EditOp {
             _ => Some(EditOp::Group(ops)),
         }
     }
+}
+
+/// Write column slices into the block starting at `(row, col)`.
+fn write_block(
+    ds: &mut Dataset,
+    row: usize,
+    col: usize,
+    cols: &[Column],
+) -> Result<(), DatasetError> {
+    for (j, c) in cols.iter().enumerate() {
+        match c {
+            Column::Numeric(v) => {
+                for (i, x) in v.iter().enumerate() {
+                    ds.set_numeric(VarId(col + j), row + i, *x)?;
+                }
+            }
+            Column::Text(v) => {
+                for (i, t) in v.iter().enumerate() {
+                    ds.set_text(VarId(col + j), row + i, t)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The first unused name `VAR00001`, `VAR00002`, ...
@@ -355,24 +407,67 @@ pub fn display_value(ds: &Dataset, var: usize, row: usize, labels: bool) -> Stri
 }
 
 /// Split tab-separated clipboard text into rows of cells (CRLF or LF; a final line break does
-/// not make an empty row).
+/// not make an empty row). A cell starting with `"` is quoted as Excel writes cells holding
+/// tabs, line breaks or quotes: it runs to the closing quote, and `""` inside is one quote.
 pub fn parse_clipboard(text: &str) -> Vec<Vec<String>> {
-    let mut lines: Vec<&str> = text.split('\n').collect();
-    if lines
-        .last()
-        .is_some_and(|l| l.trim_end_matches('\r').is_empty())
-    {
-        lines.pop();
+    let mut rows = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut chars = text.chars().peekable();
+    let mut at_start = true; // at the start of a cell
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if at_start => {
+                at_start = false;
+                while let Some(q) = chars.next() {
+                    if q == '"' {
+                        if chars.peek() == Some(&'"') {
+                            chars.next();
+                            cell.push('"');
+                        } else {
+                            break;
+                        }
+                    } else {
+                        cell.push(q);
+                    }
+                }
+            }
+            '\t' => {
+                row.push(std::mem::take(&mut cell));
+                at_start = true;
+            }
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\n' => {
+                row.push(std::mem::take(&mut cell));
+                rows.push(std::mem::take(&mut row));
+                at_start = true;
+            }
+            _ => {
+                cell.push(c);
+                at_start = false;
+            }
+        }
     }
-    lines
-        .iter()
-        .map(|l| {
-            l.trim_end_matches('\r')
-                .split('\t')
-                .map(str::to_string)
-                .collect()
+    if !cell.is_empty() || !row.is_empty() || !at_start {
+        row.push(cell);
+        rows.push(row);
+    }
+    rows
+}
+
+/// Same values (NaN equals NaN).
+fn same_columns(a: &[Column], b: &[Column]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| match (x, y) {
+            (Column::Numeric(x), Column::Numeric(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|(p, q)| p == q || (p.is_nan() && q.is_nan()))
+            }
+            (Column::Text(x), Column::Text(y)) => x == y,
+            _ => false,
         })
-        .collect()
 }
 
 fn invalid(text: impl Into<String>) -> Message {
@@ -451,15 +546,7 @@ impl AppState {
     }
 
     fn rename_keys(&mut self, op: &EditOp, forward: bool) {
-        let mut r = Vec::new();
-        op.renames(&mut r);
-        for (old, new) in r {
-            if forward {
-                self.editor.rename_key(&old, &new);
-            } else {
-                self.editor.rename_key(&new, &old);
-            }
-        }
+        op.sync_ui(&mut self.editor, forward);
     }
 
     fn apply_or_message(&mut self, op: Option<EditOp>) -> bool {
@@ -475,23 +562,28 @@ impl AppState {
 
     // ----- cells -----
 
-    /// Ops creating the variables and cases needed for cells up to `(last_row, last_col)`:
-    /// new numeric variables `VARnnnnn` (F8.2) and blank cases, as SPSS does when typing past
-    /// the data.
-    fn grow_ops(&self, last_row: usize, last_col: usize) -> Vec<EditOp> {
+    /// Names of the new variables needed for cells up to column `last_col` (`VARnnnnn`, one per
+    /// column from the current last variable to `last_col`); column `c >= n_vars` gets
+    /// `names[c - n_vars]`.
+    fn new_var_names(&self, last_col: usize) -> Vec<String> {
+        let ds = self.doc.ds();
+        next_var_names(ds, (last_col + 1).saturating_sub(ds.n_vars()))
+    }
+
+    /// Ops creating the variables `names` (after the last one) and the blank cases needed up to
+    /// case `last_row`, as SPSS does when typing past the data.
+    fn grow_ops(&self, last_row: usize, names: &[String]) -> Vec<EditOp> {
         let ds = self.doc.ds();
         let (n_vars, n_cases) = (ds.n_vars(), ds.n_cases());
-        let mut ops = Vec::new();
-        if last_col >= n_vars {
-            let names = next_var_names(ds, last_col + 1 - n_vars);
-            for (i, name) in names.into_iter().enumerate() {
-                ops.push(EditOp::InsertVar {
-                    at: n_vars + i,
-                    var: Box::new(Variable::numeric(&name)),
-                    col: Column::Numeric(vec![f64::NAN; n_cases]),
-                });
-            }
-        }
+        let mut ops: Vec<EditOp> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| EditOp::InsertVar {
+                at: n_vars + i,
+                var: Box::new(Variable::numeric(name)),
+                col: Column::Numeric(vec![f64::NAN; n_cases]),
+            })
+            .collect();
         if last_row >= n_cases {
             ops.push(EditOp::InsertCase {
                 at: n_cases,
@@ -501,19 +593,20 @@ impl AppState {
         ops
     }
 
-    /// The variable a cell in column `col` belongs to (a new numeric one past the data).
-    fn target_var(&self, col: usize) -> Variable {
+    /// The variable of column `col`: an existing one, or the new numeric one `names` gives it.
+    fn target_var(&self, col: usize, names: &[String]) -> Variable {
         let ds = self.doc.ds();
         ds.try_var(VarId(col))
             .cloned()
-            .unwrap_or_else(|| Variable::numeric(&next_var_name(ds)))
+            .unwrap_or_else(|| Variable::numeric(&names[col - ds.n_vars()]))
     }
 
     /// Enter `text` into cell `(row, col)` as typed in the Data View. Past the last variable or
     /// case, the needed variables (`VAR00001`, ...) and cases are created first (one undo step).
     /// Invalid numeric text queues a message and changes nothing (returns false).
     pub fn set_cell_text(&mut self, row: usize, col: usize, text: &str) -> bool {
-        let var = self.target_var(col);
+        let names = self.new_var_names(col);
+        let var = self.target_var(col, &names);
         let new = match parse_cell(&var, text, self.value_labels) {
             Ok(v) => v,
             Err(e) => {
@@ -531,7 +624,7 @@ impl AppState {
         } else {
             CellValue::blank(&var.var_type)
         };
-        let mut ops = self.grow_ops(row, col);
+        let mut ops = self.grow_ops(row, &names);
         if !new.same(&old) {
             ops.push(EditOp::SetCell {
                 var: col,
@@ -543,66 +636,111 @@ impl AppState {
         self.apply_or_message(EditOp::group(ops))
     }
 
+    /// The current values of the block `rows` x `cols` as column slices; cells past the data
+    /// are blank (of the type of `vars[j]`).
+    fn block_values(
+        &self,
+        rows: Range<usize>,
+        cols: Range<usize>,
+        vars: &[Variable],
+    ) -> Vec<Column> {
+        let ds = self.doc.ds();
+        let n_cases = ds.n_cases();
+        let inside = rows.start.min(n_cases)..rows.end.min(n_cases);
+        let extra = rows.len() - inside.len();
+        cols.zip(vars)
+            .map(
+                |(c, v)| match ds.try_var(VarId(c)).map(|_| ds.column(VarId(c))) {
+                    Some(Column::Numeric(x)) => {
+                        let mut out = x[inside.clone()].to_vec();
+                        out.extend(std::iter::repeat_n(f64::NAN, extra));
+                        Column::Numeric(out)
+                    }
+                    Some(Column::Text(x)) => {
+                        let mut out = x[inside.clone()].to_vec();
+                        out.extend(std::iter::repeat_n(String::new(), extra));
+                        Column::Text(out)
+                    }
+                    None => match v.var_type {
+                        VarType::Numeric => Column::Numeric(vec![f64::NAN; rows.len()]),
+                        VarType::String { .. } => Column::Text(vec![String::new(); rows.len()]),
+                    },
+                },
+            )
+            .collect()
+    }
+
     /// Paste tab-separated text (e.g. copied from Excel) with its top-left cell at
     /// `(row, col)`, creating variables (numeric) and cases as needed. Text that is not a number
     /// in a numeric column rejects the whole paste with a message. One undo step.
+    ///
+    /// Trailing columns (rows) that are empty in every row (column) and lie past the last
+    /// variable (case) are ignored, so a trailing tab does not create a variable.
     pub fn paste_text(&mut self, row: usize, col: usize, text: &str) -> bool {
         let grid = parse_clipboard(text);
-        let width = grid.iter().map(Vec::len).max().unwrap_or(0);
-        if grid.is_empty() || width == 0 {
+        let (n_vars, n_cases) = (self.doc.ds().n_vars(), self.doc.ds().n_cases());
+        let blank = |t: &str| t.trim().is_empty();
+        let mut width = grid.iter().map(Vec::len).max().unwrap_or(0);
+        while width > 0
+            && col + width > n_vars
+            && grid
+                .iter()
+                .all(|l| l.get(width - 1).is_none_or(|t| blank(t)))
+        {
+            width -= 1;
+        }
+        let mut height = grid.len();
+        while height > 0
+            && row + height > n_cases
+            && grid[height - 1].iter().take(width).all(|t| blank(t))
+        {
+            height -= 1;
+        }
+        if width == 0 || height == 0 {
             return false;
         }
-        let vars: Vec<Variable> = (col..col + width).map(|c| self.target_var(c)).collect();
-        // New variables get consecutive names.
-        let new_names = next_var_names(self.doc.ds(), width);
-        let n_vars = self.doc.ds().n_vars();
-        let mut cells = Vec::new();
-        for (i, line) in grid.iter().enumerate() {
-            for (j, t) in line.iter().enumerate() {
-                let c = col + j;
-                let var = if c < n_vars {
-                    vars[j].clone()
-                } else {
-                    Variable::numeric(&new_names[c - n_vars])
-                };
-                match parse_cell(&var, t, self.value_labels) {
-                    Ok(v) => cells.push((row + i, c, v)),
-                    Err(_) => {
+        let names = self.new_var_names(col + width - 1);
+        let vars: Vec<Variable> = (col..col + width)
+            .map(|c| self.target_var(c, &names))
+            .collect();
+        let old = self.block_values(row..row + height, col..col + width, &vars);
+        let mut new = old.clone();
+        for (i, line) in grid.iter().take(height).enumerate() {
+            for (j, t) in line.iter().take(width).enumerate() {
+                match (parse_cell(&vars[j], t, self.value_labels), &mut new[j]) {
+                    (Ok(CellValue::Num(x)), Column::Numeric(v)) => v[i] = x + 0.0,
+                    (Ok(CellValue::Text(s)), Column::Text(v)) => v[i] = s,
+                    (Ok(_), _) => unreachable!("parse_cell follows the variable type"),
+                    (Err(_), _) => {
                         self.push_message(invalid(format!(
                             "The data cannot be pasted: \"{}\" is not a valid value for the \
                              numeric variable {}. Nothing was changed.",
                             t.trim(),
-                            var.name
+                            vars[j].name
                         )));
                         return false;
                     }
                 }
             }
         }
-        let ds = self.doc.ds();
-        let (n_cases, n_vars) = (ds.n_cases(), ds.n_vars());
-        let mut ops = self.grow_ops(row + grid.len() - 1, col + width - 1);
-        for (r, c, new) in cells {
-            let old = if r < n_cases && c < n_vars {
-                CellValue::get(ds, c, r)
-            } else {
-                CellValue::blank(&VarType::Numeric)
-            };
-            let old = match (&new, old) {
-                // Blank text into a new string cell, etc.: compare against the right type.
-                (CellValue::Text(_), CellValue::Num(_)) => CellValue::Text(String::new()),
-                (_, o) => o,
-            };
-            if !new.same(&old) {
-                ops.push(EditOp::SetCell {
-                    var: c,
-                    row: r,
-                    old,
-                    new,
-                });
-            }
+        let mut ops = self.grow_ops(row + height - 1, &names);
+        if !same_columns(&old, &new) {
+            ops.push(EditOp::SetBlock { row, col, old, new });
         }
         self.apply_or_message(EditOp::group(ops))
+    }
+
+    /// Paste a single value into every cell of the block `rows` x `cols` (SPSS: pasting one
+    /// value into a multi-cell selection fills it). One undo step.
+    pub fn paste_fill(&mut self, rows: Range<usize>, cols: Range<usize>, value: &str) -> bool {
+        if rows.is_empty() || cols.is_empty() {
+            return false;
+        }
+        // Quote the value so tabs/quotes in it survive the round trip through the parser.
+        let cell = format!("\"{}\"", value.replace('"', "\"\""));
+        let line = vec![cell.as_str(); cols.len()].join("\t");
+        let text = vec![line; rows.len()].join("\n");
+        self.paste_text(rows.start, cols.start, &text)
     }
 
     /// Tab-separated text of a block (CRLF after every row, as Excel copies). Values are copied
@@ -639,22 +777,27 @@ impl AppState {
         let ds = self.doc.ds();
         let rows = rows.start..rows.end.min(ds.n_cases());
         let cols = cols.start..cols.end.min(ds.n_vars());
-        let mut ops = Vec::new();
-        for c in cols {
-            let blank = CellValue::blank(&ds.var(VarId(c)).var_type);
-            for r in rows.clone() {
-                let old = CellValue::get(ds, c, r);
-                if !old.same(&blank) {
-                    ops.push(EditOp::SetCell {
-                        var: c,
-                        row: r,
-                        old,
-                        new: blank.clone(),
-                    });
-                }
-            }
+        if rows.is_empty() || cols.is_empty() {
+            return false;
         }
-        self.apply_or_message(EditOp::group(ops))
+        let vars: Vec<Variable> = cols.clone().map(|c| ds.var(VarId(c)).clone()).collect();
+        let old = self.block_values(rows.clone(), cols.clone(), &vars);
+        let new: Vec<Column> = old
+            .iter()
+            .map(|c| match c {
+                Column::Numeric(v) => Column::Numeric(vec![f64::NAN; v.len()]),
+                Column::Text(v) => Column::Text(vec![String::new(); v.len()]),
+            })
+            .collect();
+        if same_columns(&old, &new) {
+            return false;
+        }
+        self.apply_or_message(Some(EditOp::SetBlock {
+            row: rows.start,
+            col: cols.start,
+            old,
+            new,
+        }))
     }
 
     // ----- variables and cases -----
@@ -696,6 +839,7 @@ impl AppState {
                 var: Box::new(ds.var(VarId(i)).clone()),
                 col: ds.column(VarId(i)).clone(),
                 weight: weight == Some(VarId(i)),
+                ui: self.editor.props(&ds.var(VarId(i)).name),
             })
             .collect();
         self.apply_or_message(EditOp::group(ops))
@@ -881,6 +1025,12 @@ impl AppState {
 
     // ----- acting on the selection (Edit menu, context menus) -----
 
+    /// Commit text being typed into a Data View cell or a Variable View field, if any.
+    pub fn commit_pending_edits(&mut self) {
+        crate::data_view::commit_edit(self);
+        crate::variable_view::commit_var_edit(self);
+    }
+
     /// Edit > Insert Variable: before the selected variable (Data View column or Variable View
     /// row).
     pub fn insert_variable_here(&mut self) -> bool {
@@ -929,6 +1079,10 @@ impl AppState {
     pub fn paste_at_cursor(&mut self, text: &str) -> bool {
         let ds = self.doc.ds();
         let (rows, cols) = self.editor.block(ds.n_cases(), ds.n_vars());
+        let grid = parse_clipboard(text);
+        if grid.len() == 1 && grid[0].len() == 1 && rows.len() * cols.len() > 1 {
+            return self.paste_fill(rows, cols, &grid[0][0]);
+        }
         self.paste_text(rows.start, cols.start, text)
     }
 }

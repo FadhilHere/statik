@@ -378,6 +378,18 @@ impl AppState {
     /// Apply a quick command now, or package a long-running one as a [`Job`].
     pub fn prepare(&mut self, cmd: Command) -> Prepared {
         use Prepared::Done;
+        if matches!(
+            cmd,
+            Command::Undo
+                | Command::Redo
+                | Command::InsertVariable
+                | Command::InsertCases
+                | Command::Clear
+        ) {
+            // Text typed into a cell is committed first, so it lands on the cell it was typed
+            // into and not on wherever the edit moves the data.
+            self.commit_pending_edits();
+        }
         let rev = self.doc.rev;
         match cmd {
             Command::New => {

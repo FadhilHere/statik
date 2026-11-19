@@ -114,6 +114,14 @@ pub struct VarEdit {
     pub focused: bool,
 }
 
+/// The UI-side properties of one variable (`None` = default).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UiProps {
+    pub align: Option<Align>,
+    pub role: Option<Role>,
+    pub columns: Option<usize>,
+}
+
 #[derive(Debug, Default)]
 pub struct EditorState {
     pub view: View,
@@ -221,6 +229,38 @@ impl EditorState {
     /// Set the UI-side Columns of a numeric variable.
     pub fn set_numeric_columns(&mut self, name: &str, n: usize) {
         self.columns.insert(key(name), n);
+    }
+
+    /// The UI-side properties set for variable `name`.
+    pub fn props(&self, name: &str) -> UiProps {
+        let k = key(name);
+        UiProps {
+            align: self.align.get(&k).copied(),
+            role: self.role.get(&k).copied(),
+            columns: self.columns.get(&k).copied(),
+        }
+    }
+    /// Remove (and return) the UI-side properties of a deleted variable.
+    pub(crate) fn take_props(&mut self, name: &str) -> UiProps {
+        let k = key(name);
+        UiProps {
+            align: self.align.remove(&k),
+            role: self.role.remove(&k),
+            columns: self.columns.remove(&k),
+        }
+    }
+    /// Put back the UI-side properties of a variable (undo of a delete).
+    pub(crate) fn restore_props(&mut self, name: &str, p: UiProps) {
+        let k = key(name);
+        if let Some(a) = p.align {
+            self.align.insert(k.clone(), a);
+        }
+        if let Some(r) = p.role {
+            self.role.insert(k.clone(), r);
+        }
+        if let Some(c) = p.columns {
+            self.columns.insert(k, c);
+        }
     }
 
     /// A variable was renamed: keep its UI-side properties.
