@@ -225,15 +225,17 @@ impl StatikApp {
         let user_save = matches!(r, JobResult::Saved { .. });
         let recovered = matches!(r, JobResult::Recovered { .. });
         let result = self.state.finish(r);
-        // The Recover job (the only job running while `recovering` is set) has finished.
-        if let Some(orphan) = self.recovering.take() {
-            if recovered && result.is_ok() && self.state.doc.dirty() {
-                // Back the recovered data up in this instance's folder at once; the old
-                // folder is removed once that has happened (see `show`).
-                self.autosave.recovered();
-                self.recovered_from = Some(orphan);
-            }
-            // Otherwise (no file readable) the folder is kept for the next start.
+        // The Recover job (the only job running while `recovering` is set) has finished. If no
+        // file was readable, the orphan is dropped here: its folder is kept for the next start.
+        if let Some(orphan) = self.recovering.take()
+            && recovered
+            && result.is_ok()
+            && self.state.doc.dirty()
+        {
+            // Back the recovered data up in this instance's folder at once; the old folder is
+            // removed once that has happened (see `show`).
+            self.autosave.recovered();
+            self.recovered_from = Some(orphan);
         }
         // The save started by "Yes" at the save-changes question: continue only if it worked.
         if let Some(a) = self.after_save.take() {
