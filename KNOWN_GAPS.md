@@ -107,7 +107,7 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - **Copy, Cut and Paste in the Variable View** (copying variable definitions) are not available; Edit > Copy/Cut/Paste act on the Data View only.
 - **Invalid numeric input** shows a message box instead of SPSS's beep; the old value is kept. A comma is accepted as the decimal separator when the text has no point and one comma ("3,5").
 - **Number display:** values are formatted with the variable's decimals; a number too wide for its column is shown in E notation (`1.00E10`), else as asterisks. Date/time/currency formats kept from `.sav` files are shown as plain numbers (the Type column names the format: Date, Time, Comma, Dollar, ...). The Variable Type dialog only offers Numeric and String.
-- **Undo** holds the last 100 edits. New/Open clear it, and a procedure that changes the data (saved variables; later Compute/Recode) clears it as well.
+- **Undo** holds the last 100 edits. New/Open/Import clear it, and a procedure that changes the data (saved variables) clears it as well. Compute and Recode are undoable (see "Transform and import dialogs").
 - The Measure, Align and Role icons are Statik's own drawings.
 
 ## Output viewer, charts, copy (Plan 3 Task 4)
@@ -129,3 +129,12 @@ Deviations from SPSS and unimplemented features are recorded here by the tasks t
 - One-Way ANOVA with several dependents runs one analysis per dependent (one "Oneway" heading, separate tables per dependent), whereas SPSS stacks the dependents in one ANOVA table.
 - Independent-Samples T Test: the grouping variable must be numeric and Cut point is not available.
 - Variable lists: no drag and drop and no keyboard navigation (click, Ctrl/Shift+click, double-click and the arrow buttons only); no right-click "Variable Information"; the "Display variable labels / names" preference is fixed to labels. Pasted syntax opens in a read-only Syntax window (copy only, cannot be run or edited).
+
+## Transform and import dialogs (Plan 3 Task 6)
+
+- **Compute Variable:** only numeric targets (Type & Label ▸ String is disabled). The function list holds the functions the engine supports (Arithmetic, Statistical, Missing Values, LAG); SPSS's other groups (string, date, random, CDF/PDF...) are missing. The keypad inserts operators with a space on each side. Syntax errors are found when OK is pressed (with the character position, 1-based, and the cursor put there); an unknown variable is reported when the computation runs. The If... sub-dialog has a variable list and keypad but no function list.
+- **Undo of Compute/Recode:** one undo step per run. A new target or new recode variables are removed again; an existing target gets its old values and label back. Procedures that save variables (Regression, Descriptives) still clear the undo history.
+- **Recode into Different Variables:** numeric inputs and numeric outputs only ("Output variables are strings" and "Convert numeric strings" are disabled), no If... case selection. Rules keep the order they were added in, except that ELSE always stays last; adding a rule for an old value that is already listed replaces its new value. SPSS sorts the list by kind of old value.
+- **Paste syntax** writes one `VARIABLE LABELS` command per labelled variable. `IF (cond) target=expr.` is used for Compute with a condition, as SPSS does.
+- **Read CSV File:** the preview reads the whole file on the UI thread to detect the decimal symbol (a very large file pauses the dialog briefly). Only the delimiter, decimal symbol and header line can be chosen; the text qualifier is always `"`, the encoding is detected (UTF-8/UTF-16 BOM, else Windows-1252), and variable types are decided by the importer (no per-column format choice). The pasted/logged `GET DATA /TYPE=TXT` is an approximation of SPSS's syntax (`/VARIABLES=` lists the names with `AUTO`; `SET DECIMAL COMMA` inside `PRESERVE`/`RESTORE` for a decimal comma) and cannot be run anywhere in Statik. File ▸ Open of a `.csv` still reads it with automatic settings (no dialog).
+- **Read Excel File:** the worksheet and the header row can be chosen; no preview, no cell range, no "percentage of values that determine data type".

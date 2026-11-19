@@ -18,6 +18,7 @@
 //! A panic inside the closure is caught (`catch_unwind`; the release profile uses
 //! `panic = "unwind"`) and reported as an error message. Stack overflow and out-of-memory still
 //! abort the process.
+use crate::edit::EditOp;
 use crate::state::OutputEntry;
 use dataset::Dataset;
 use std::path::PathBuf;
@@ -66,6 +67,8 @@ pub enum JobResult {
         changed: bool,
         rev: u64,
         entry: OutputEntry,
+        /// Reverts the change (Compute, Recode); `None` = not undoable (clears the history).
+        undo: Option<EditOp>,
     },
     /// The job failed; the message is shown to the user.
     Failed(String),

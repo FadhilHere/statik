@@ -92,6 +92,20 @@ pub fn labeled_text(ui: &mut Ui, label: &str, text: &mut String, width: f32) -> 
     .inner
 }
 
+/// A one-line text field whose accessible name is `name` (for fields without a caption of
+/// their own, e.g. the second bound of a range).
+pub fn named_text(ui: &mut Ui, text: &mut String, width: f32, name: &str) -> Response {
+    let r = ui.add(egui::TextEdit::singleline(text).desired_width(width));
+    let enabled = ui.is_enabled();
+    let (t, n) = (text.clone(), name.to_string());
+    r.widget_info(|| {
+        let mut info = egui::WidgetInfo::text_edit(enabled, &t, &t, "");
+        info.label = Some(n.clone());
+        info
+    });
+    r
+}
+
 /// Options Statik does not support yet: visible, greyed out.
 pub fn checks_off(ui: &mut Ui, items: &[(&str, bool)]) {
     for &(label, checked) in items {

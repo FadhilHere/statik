@@ -16,6 +16,7 @@ dataset = { path = "../dataset" }
 sav-io = { path = "../sav-io" }
 output-model = { path = "../output-model" }
 procedures = { path = "../procedures" }
+transform = { path = "../transform" }
 eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "glow"] }
 egui = "0.35"
 egui_extras = "0.35"

@@ -13,6 +13,7 @@
 //! revision is unchanged. Otherwise the newer in-memory state is kept and a conflict message is
 //! queued.
 use crate::dialogs::DialogHost;
+use crate::dialogs::import::ImportDialog;
 use crate::edit::EditOp;
 use crate::editor::EditorState;
 use crate::jobs::{Job, JobResult, SaveKind};
@@ -206,6 +207,11 @@ pub struct ProcOutput {
     pub items: Vec<OutputItem>,
     /// True when the procedure changed the dataset (saved variables); compute/recode say true.
     pub changed: bool,
+    /// How to undo the change (Compute, Recode). `None` with `changed` = not undoable: the undo
+    /// history is cleared when the result is applied (procedures saving variables, as in SPSS).
+    pub undo: Option<EditOp>,
+    /// The run failed: this message is shown, and neither data nor output is applied.
+    pub error: Option<String>,
 }
 
 impl ProcOutput {
@@ -213,7 +219,7 @@ impl ProcOutput {
     pub fn output(items: Vec<OutputItem>) -> Self {
         ProcOutput {
             items,
-            changed: false,
+            ..Default::default()
         }
     }
     /// Output, and the data was changed.
@@ -221,9 +227,29 @@ impl ProcOutput {
         ProcOutput {
             items,
             changed: true,
+            ..Default::default()
+        }
+    }
+    /// The data was changed, and `undo` reverts it (transformations).
+    pub fn undoable(items: Vec<OutputItem>, undo: EditOp) -> Self {
+        ProcOutput {
+            items,
+            changed: true,
+            undo: Some(undo),
+            error: None,
+        }
+    }
+    /// The run failed with `message`; nothing is applied.
+    pub fn failed(message: impl Into<String>) -> Self {
+        ProcOutput {
+            error: Some(message.into()),
+            ..Default::default()
         }
     }
 }
+
+/// Outline title of the output entry of a transformation (Compute, Recode), as in SPSS.
+pub const LOG_TITLE: &str = "Log";
 
 #[derive(Debug)]
 pub struct AppState {
@@ -262,6 +288,8 @@ pub struct AppState {
     pub dialogs: DialogHost,
     /// The Syntax window (text pasted by dialogs).
     pub syntax: SyntaxWindow,
+    /// The open Read CSV File / Read Excel File dialog (File ▸ Import Data).
+    pub import: Option<ImportDialog>,
 }
 
 impl Default for AppState {
@@ -301,6 +329,7 @@ impl AppState {
             viewer: OutputView::default(),
             dialogs: DialogHost::default(),
             syntax: SyntaxWindow::default(),
+            import: None,
         }
     }
 
@@ -490,42 +519,11 @@ impl AppState {
                     },
                 ))
             }
-            Command::ImportCsv(path, opt) => Prepared::Job(Job::new(
-                "Reading text data...",
-                move || match sav_io::import_csv(&path, &opt) {
-                    Ok(ds) => {
-                        let log = format!("GET DATA\n  /TYPE=TXT\n  /FILE={}.", quoted(&path));
-                        JobResult::Loaded {
-                            ds,
-                            path,
-                            notes: Vec::new(),
-                            log,
-                            rev,
-                        }
-                    }
-                    Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
-                },
-            )),
-            Command::ImportXlsx(path, sheet) => Prepared::Job(Job::new(
-                "Reading Excel file...",
-                move || match sav_io::import_xlsx(&path, sheet.as_deref(), true) {
-                    Ok(ds) => {
-                        let mut log = format!("GET DATA\n  /TYPE=XLSX\n  /FILE={}", quoted(&path));
-                        if let Some(s) = &sheet {
-                            log.push_str(&format!("\n  /SHEET=name '{}'", s.replace('\'', "''")));
-                        }
-                        log.push_str("\n  /READNAMES=ON.");
-                        JobResult::Loaded {
-                            ds,
-                            path,
-                            notes: Vec::new(),
-                            log,
-                            rev,
-                        }
-                    }
-                    Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
-                },
-            )),
+            Command::ImportCsv(path, opt) => {
+                let log = format!("GET DATA\n  /TYPE=TXT\n  /FILE={}.", quoted(&path));
+                Prepared::Job(csv_job(path, opt, log, rev))
+            }
+            Command::ImportXlsx(path, sheet) => Prepared::Job(xlsx_job(path, sheet, true, rev)),
             Command::Save => match &self.doc.path {
                 Some(p) if is_sav(p) => Prepared::Job(self.save_job(p.clone(), SaveKind::User)),
                 _ => Done(Err(
@@ -632,8 +630,21 @@ impl AppState {
         let mut ds = self.doc.ds.clone();
         let rev = self.doc.rev;
         let title = title.to_string();
-        Job::new(format!("Running {title}..."), move || {
-            let ProcOutput { items, changed } = f(&mut ds);
+        let label = if title == LOG_TITLE {
+            "Running transformations...".to_string()
+        } else {
+            format!("Running {title}...")
+        };
+        Job::new(label, move || {
+            let ProcOutput {
+                items,
+                changed,
+                undo,
+                error,
+            } = f(&mut ds);
+            if let Some(e) = error {
+                return JobResult::Failed(e);
+            }
             JobResult::Ran {
                 ds,
                 changed,
@@ -643,6 +654,7 @@ impl AppState {
                     items,
                     log: syntax,
                 },
+                undo,
             }
         })
     }
@@ -727,16 +739,21 @@ impl AppState {
                 changed,
                 rev,
                 entry,
+                undo,
             } => {
                 if changed {
                     if rev == self.doc.rev {
                         self.doc.ds = ds;
                         self.doc.touch();
-                        // The edits on the undo stack refer to the data before the procedure
-                        // (positions, old values), so they cannot be undone across it.
-                        // HOOK (Task 6): push an undo snapshot here instead, e.g. an
-                        // `EditOp` holding the replaced dataset, so Compute/Recode is undoable.
-                        self.clear_undo();
+                        match undo {
+                            // Compute/Recode: the op reverts exactly what changed, and the
+                            // older edits still apply to the data before it.
+                            Some(op) => self.record(op),
+                            // The edits on the undo stack refer to the data before the
+                            // procedure (positions, old values), so they cannot be undone
+                            // across it.
+                            None => self.clear_undo(),
+                        }
                     } else {
                         self.push_message(Message::warning(
                             "Data changed",
@@ -755,6 +772,59 @@ impl AppState {
             JobResult::Failed(e) => Err(e),
         }
     }
+}
+
+/// Quote a path for syntax (`'C:\data\x.csv'`).
+pub(crate) fn quoted_path(p: &Path) -> String {
+    quoted(p)
+}
+
+/// Read a CSV file with `opt`; `log` is the syntax shown in the output (see `finish`).
+pub(crate) fn csv_job(path: PathBuf, opt: CsvOptions, log: String, rev: u64) -> Job {
+    Job::new("Reading text data...", move || {
+        match sav_io::import_csv(&path, &opt) {
+            Ok(ds) => JobResult::Loaded {
+                ds,
+                path,
+                notes: Vec::new(),
+                log,
+                rev,
+            },
+            Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
+        }
+    })
+}
+
+/// GET DATA syntax for reading an Excel sheet.
+pub(crate) fn xlsx_syntax(path: &Path, sheet: Option<&str>, header: bool) -> String {
+    let mut log = format!("GET DATA\n  /TYPE=XLSX\n  /FILE={}", quoted(path));
+    if let Some(s) = sheet {
+        log.push_str(&format!("\n  /SHEET=name '{}'", s.replace('\'', "''")));
+    }
+    log.push_str(&format!(
+        "\n  /CELLRANGE=FULL\n  /READNAMES={}.",
+        if header { "ON" } else { "OFF" }
+    ));
+    log
+}
+
+/// Read one sheet (`None` = the first) of an Excel file; `header` = the first row holds names.
+pub(crate) fn xlsx_job(path: PathBuf, sheet: Option<String>, header: bool, rev: u64) -> Job {
+    Job::new("Reading Excel file...", move || {
+        match sav_io::import_xlsx(&path, sheet.as_deref(), header) {
+            Ok(ds) => {
+                let log = xlsx_syntax(&path, sheet.as_deref(), header);
+                JobResult::Loaded {
+                    ds,
+                    path,
+                    notes: Vec::new(),
+                    log,
+                    rev,
+                }
+            }
+            Err(e) => JobResult::Failed(format!("Cannot import {}:\n{e}", path.display())),
+        }
+    })
 }
 
 /// Run a procedure synchronously on the document's dataset and append its output (tests,

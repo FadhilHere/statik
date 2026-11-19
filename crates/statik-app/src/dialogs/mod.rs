@@ -10,18 +10,27 @@
 //! - sub-dialogs (Statistics..., Plots..., ...) are small windows on top with Continue /
 //!   Cancel / Help; Cancel restores the settings from before the sub-dialog opened.
 //!
+//! **Transform dialogs** (Compute Variable, Recode into Different Variables) are procedure
+//! dialogs too; their run returns an undo op ([`crate::state::ProcOutput::undoable`]) and an
+//! output entry titled "Log". Compute asks "Change existing variable?" first
+//! ([`DialogHost::confirm`]). The Read CSV / Excel dialogs are in [`import`].
+//!
 //! OK maps the stored variable names to current `VarId`s ([`ProcDialog::options`]; a missing
 //! name gives "Variable x no longer exists." and nothing runs), queues the procedure as a job
 //! with the dialog's syntax as the log entry, and closes the dialog. Paste appends the syntax to
 //! the Syntax window (`AppState::syntax`) and closes the dialog.
+pub mod compute;
 pub mod descriptives;
 pub mod explore;
+pub mod expr;
 pub mod frame;
 pub mod frequencies;
+pub mod import;
 pub mod message;
 pub mod npar_ks;
 pub mod npar_runs;
 pub mod oneway;
+pub mod recode;
 pub mod regression;
 pub mod ttest_ind;
 pub mod ttest_one;
@@ -97,6 +106,7 @@ impl RunSpec {
                 ProcOutput {
                     items,
                     changed: ds.n_vars() != before,
+                    ..Default::default()
                 }
             }),
         }
@@ -126,6 +136,15 @@ pub trait ProcDialog {
     }
     /// Draw sub-dialog `name` (a side-button label such as `"Statistics..."`).
     fn sub_ui(&mut self, _ui: &mut Ui, _name: &str) {}
+    /// Like [`Self::sub_ui`], for sub-dialogs that list variables (Compute ▸ If...). The host
+    /// calls this one; by default it calls `sub_ui`.
+    fn sub_ui_ds(&mut self, ui: &mut Ui, name: &str, _ds: &Dataset) {
+        self.sub_ui(ui, name);
+    }
+    /// Sub-dialog window title after "<Dialog>: " (default: the button label without "...").
+    fn sub_title(&self, name: &str) -> String {
+        name.trim_end_matches("...").to_string()
+    }
     /// Continue in sub-dialog `name`: `Err` keeps it open and shows the message.
     fn sub_continue(&mut self, _name: &str) -> Result<(), String> {
         Ok(())
@@ -145,6 +164,8 @@ pub struct Dialogs {
     pub regression: regression::RegressionDialog,
     pub npar_ks: npar_ks::KsDialog,
     pub runs: npar_runs::RunsDialog,
+    pub compute: compute::ComputeDialog,
+    pub recode: recode::RecodeDialog,
 }
 
 impl Dialogs {
@@ -160,7 +181,8 @@ impl Dialogs {
             DialogKind::LinearRegression => &self.regression,
             DialogKind::NparOneSampleKs => &self.npar_ks,
             DialogKind::NparRuns => &self.runs,
-            DialogKind::Compute | DialogKind::RecodeDifferent => return None,
+            DialogKind::Compute => &self.compute,
+            DialogKind::RecodeDifferent => &self.recode,
         })
     }
     pub fn get_mut(&mut self, kind: DialogKind) -> Option<&mut dyn ProcDialog> {
@@ -175,7 +197,8 @@ impl Dialogs {
             DialogKind::LinearRegression => &mut self.regression,
             DialogKind::NparOneSampleKs => &mut self.npar_ks,
             DialogKind::NparRuns => &mut self.runs,
-            DialogKind::Compute | DialogKind::RecodeDifferent => return None,
+            DialogKind::Compute => &mut self.compute,
+            DialogKind::RecodeDifferent => &mut self.recode,
         })
     }
 }
@@ -191,6 +214,11 @@ pub struct DialogHost {
     pub dialogs: Dialogs,
     /// Bring the dialog window to the front on the next frame.
     raise: bool,
+    /// A Yes/No question shown over the dialog (Compute: "Change existing variable?"); Yes
+    /// presses OK again with [`Self::confirmed`] set.
+    pub confirm: Option<&'static str>,
+    /// The question was answered Yes (consumed by the next OK).
+    pub confirmed: bool,
 }
 
 impl DialogHost {
@@ -209,6 +237,8 @@ impl DialogHost {
         self.open = None;
         self.sub = None;
         self.backup = None;
+        self.confirm = None;
+        self.confirmed = false;
     }
     pub fn is_open(&self) -> bool {
         self.open.is_some()
@@ -263,6 +293,22 @@ pub fn ok(state: &mut AppState) -> bool {
     let Some(kind) = state.dialogs.open else {
         return false;
     };
+    if kind == DialogKind::Compute {
+        // Syntax errors are reported here (with the cursor put at the error), and an existing
+        // target is only changed after "Change existing variable?" was answered Yes.
+        let confirmed = std::mem::take(&mut state.dialogs.confirmed);
+        match state.dialogs.dialogs.compute.check(state.doc.ds()) {
+            Err(e) => {
+                state.push_message(Message::warning(kind.title(), e));
+                return false;
+            }
+            Ok(true) if !confirmed => {
+                state.dialogs.confirm = Some(compute::CHANGE_EXISTING);
+                return false;
+            }
+            Ok(_) => {}
+        }
+    }
     let Some(d) = state.dialogs.dialogs.get(kind) else {
         return false;
     };
@@ -313,6 +359,7 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
         return;
     };
     let message = state.message().is_some();
+    let confirm = state.dialogs.confirm;
     let sub = state.dialogs.sub;
     let raise = std::mem::take(&mut state.dialogs.raise);
     let screen = ctx.content_rect();
@@ -336,7 +383,7 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
         .pivot(egui::Align2::CENTER_CENTER)
         .constrain(true)
         .show(ctx, |ui| {
-            ui.add_enabled_ui(sub.is_none() && !busy, |ui| {
+            ui.add_enabled_ui(sub.is_none() && confirm.is_none() && !busy, |ui| {
                 let body_h = (ui.available_height() - 34.0).max(60.0);
                 egui::ScrollArea::both()
                     .id_salt("body")
@@ -358,7 +405,7 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
 
     let mut sub_action = SubAction::None;
     if let Some(name) = sub {
-        let sub_title = format!("{title}: {}", name.trim_end_matches("..."));
+        let sub_title = format!("{title}: {}", d.sub_title(name));
         let r = egui::Window::new(sub_title)
             .id(egui::Id::new(("statik-subdialog", kind, name)))
             .order(egui::Order::Foreground)
@@ -370,7 +417,7 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
             .show(ctx, |ui| {
                 ui.set_min_width(300.0);
                 ui.add_enabled_ui(!busy, |ui| {
-                    d.sub_ui(ui, name);
+                    d.sub_ui_ds(ui, name, ds);
                     ui.separator();
                     sub_action = frame::sub_buttons(ui);
                 });
@@ -381,7 +428,7 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
         if !message && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             sub_action = SubAction::Cancel;
         }
-    } else if !message && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    } else if !message && confirm.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = DialogAction::Cancel;
     }
 
@@ -419,4 +466,57 @@ pub fn show_dialogs(ctx: &Context, state: &mut AppState, busy: bool) {
         DialogAction::Help => state.push_message(Message::info(title, help)),
         DialogAction::Sub(name) => state.dialogs.open_sub(name),
     }
+
+    if let Some(q) = confirm
+        && !message
+    {
+        match confirm_box(ctx, q) {
+            Some(true) => {
+                state.dialogs.confirm = None;
+                state.dialogs.confirmed = true;
+                ok(state);
+                state.dialogs.confirmed = false;
+            }
+            Some(false) => state.dialogs.confirm = None,
+            None => {}
+        }
+    }
+}
+
+/// A modal Yes/No question. `Some(true)` = Yes, `Some(false)` = No (or Escape).
+fn confirm_box(ctx: &Context, question: &str) -> Option<bool> {
+    let mut answer = None;
+    let resp = egui::Modal::new(egui::Id::new("statik-confirm")).show(ctx, |ui| {
+        ui.set_min_width(280.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("?")
+                    .strong()
+                    .size(22.0)
+                    .color(egui::Color32::from_rgb(0x2b, 0x5c, 0xa8)),
+            );
+            ui.label(question);
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 2.0 * 80.0 - ui.spacing().item_spacing.x) / 2.0;
+            ui.add_space(w.max(0.0));
+            if ui
+                .add(egui::Button::new("Yes").min_size(vec2(80.0, 0.0)))
+                .clicked()
+            {
+                answer = Some(true);
+            }
+            if ui
+                .add(egui::Button::new("No").min_size(vec2(80.0, 0.0)))
+                .clicked()
+            {
+                answer = Some(false);
+            }
+        });
+    });
+    if answer.is_none() && resp.should_close() {
+        answer = Some(false);
+    }
+    answer
 }

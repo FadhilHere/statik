@@ -11,6 +11,7 @@
 //! Tests: after queueing or dispatching a job, call [`StatikApp::wait_for_job`] before asserting
 //! on `state.outputs` or the document.
 use crate::data_view::{commit_edit, data_view};
+use crate::dialogs::import::show_import;
 use crate::dialogs::message::message_box;
 use crate::dialogs::show_dialogs;
 use crate::editor::View;
@@ -124,8 +125,7 @@ impl StatikApp {
                     .set_title("Open CSV Data")
                     .add_filter("CSV (*.csv;*.txt)", &["csv", "txt"]);
                 if let Some(p) = d.pick_file() {
-                    // The import dialog with delimiter/decimal options comes later; detect them for now.
-                    self.dispatch(Command::ImportCsv(p, Default::default()), ctx);
+                    self.state.open_import_csv(p);
                 }
             }
             MenuAction::ImportExcel => {
@@ -133,7 +133,7 @@ impl StatikApp {
                     .set_title("Open Excel File")
                     .add_filter("Excel (*.xlsx;*.xls)", &["xlsx", "xls"]);
                 if let Some(p) = d.pick_file() {
-                    self.dispatch(Command::ImportXlsx(p, None), ctx);
+                    self.state.open_import_excel(p);
                 }
             }
             MenuAction::Save if !self.state.needs_save_as() => self.dispatch(Command::Save, ctx),
@@ -199,7 +199,7 @@ impl StatikApp {
         }
         let busy = self.busy().is_some();
         // A procedure dialog is modal: the menus and the Data Editor wait until it closes.
-        let modal = self.state.dialogs.is_open();
+        let modal = self.state.dialogs.is_open() || self.state.import.is_some();
 
         let title = self.state.title();
         if title != self.title_sent {
@@ -283,6 +283,7 @@ impl StatikApp {
         }
 
         show_dialogs(&ctx, &mut self.state, busy);
+        show_import(&ctx, &mut self.state, busy);
         syntax_window(&ctx, &mut self.state);
 
         if let Some(msg) = self.state.message()
