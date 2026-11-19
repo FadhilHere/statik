@@ -8,7 +8,7 @@ tidak perlu belajar ulang:
 - pilih analisis dari menu **Analyze**,
 - baca hasilnya di jendela **Output**, lalu salin tabelnya langsung ke Word.
 
-Cukup satu berkas `Statik.exe` (sekitar 11 MB). Tidak perlu instalasi atau lisensi, dan
+Cukup satu berkas `Statik.exe` (sekitar 11 MB) yang bisa diunduh dari [**Releases**](https://github.com/FadhilHere/statik/releases/latest). Tidak perlu instalasi atau lisensi, dan
 aplikasinya terbuka dalam kurang dari 1 detik.
 
 > Statik bukan produk IBM dan tidak berafiliasi dengan IBM SPSS Statistics. Statik bisa
@@ -48,7 +48,7 @@ Python (scipy/statsmodels). Format angkanya mengikuti SPSS, misalnya `.000`, `.9
 
 ## Menjalankan Statik
 
-1. Unduh `Statik.exe` dan simpan di folder mana saja, misalnya `Documents\Statik`.
+1. Unduh `Statik.exe` dari halaman [**Releases**](https://github.com/FadhilHere/statik/releases/latest) dan simpan di folder mana saja, misalnya `Documents\Statik`.
 2. Klik dua kali `Statik.exe`. Jendela **Statik Data Editor** terbuka dengan data kosong
    (`Untitled1`).
 3. Buka data lewat **File ▸ Open ▸ Data...** (`.sav`, `.csv`, `.xlsx`). Untuk mengatur
