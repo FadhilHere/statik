@@ -89,6 +89,49 @@ pub fn histogram_bins(values: &[f64]) -> (f64, f64, Vec<usize>) {
     (start, width, counts)
 }
 
+/// What a histogram draws besides its title, computed from its values: the bins, the normal
+/// curve (if asked for) and the legend. The Output viewer computes it once per chart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistogramStats {
+    pub start: f64,
+    pub width: f64,
+    pub counts: Vec<usize>,
+    /// Points of the normal curve (empty when not shown or the SD is 0).
+    pub curve: Vec<[f64; 2]>,
+    pub legend: Vec<String>,
+}
+
+/// The figures of a histogram of `values` (`normal_curve`: also the fitted normal curve).
+pub fn histogram_stats(values: &[f64], normal_curve: bool) -> HistogramStats {
+    let (start, width, counts) = histogram_bins(values);
+    let end = start + width * counts.len() as f64;
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let (m, sd) = mean_sd(&finite);
+    let curve = if normal_curve && sd.is_finite() && sd > 0.0 {
+        let n = finite.len() as f64;
+        let (a, b) = ((m - 3.5 * sd).min(start), (m + 3.5 * sd).max(end));
+        (0..=200)
+            .map(|i| {
+                let x = a + (b - a) * i as f64 / 200.0;
+                let z = (x - m) / sd;
+                [
+                    x,
+                    n * width * (-0.5 * z * z).exp() / (sd * (2.0 * std::f64::consts::PI).sqrt()),
+                ]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    HistogramStats {
+        start,
+        width,
+        counts,
+        curve,
+        legend: histogram_legend(values),
+    }
+}
+
 fn heading_jobs(
     ui: &Ui,
     c: &Chart,
@@ -154,6 +197,18 @@ pub fn chart_view_id(ui: &mut Ui, c: &Chart, id: egui::Id) -> Response {
 
 /// Paint a chart into `rect` (as returned by [`chart_size`]).
 pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
+    paint_chart_with(ui, c, rect, id, None);
+}
+
+/// [`paint_chart`] with the histogram figures already computed ([`histogram_stats`]); `None`
+/// computes them here.
+pub fn paint_chart_with(
+    ui: &mut Ui,
+    c: &Chart,
+    rect: Rect,
+    id: egui::Id,
+    hist: Option<&HistogramStats>,
+) {
     let w = rect.width();
     let (title, sub) = heading_jobs(ui, c, w);
     let mut y = rect.top();
@@ -200,7 +255,15 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
             x_label,
             ..
         } => {
-            let (start, width, counts) = histogram_bins(values);
+            let local;
+            let st = match hist {
+                Some(h) => h,
+                None => {
+                    local = histogram_stats(values, *normal_curve);
+                    &local
+                }
+            };
+            let (start, width, counts) = (st.start, st.width, &st.counts);
             let bars: Vec<Bar> = counts
                 .iter()
                 .enumerate()
@@ -212,23 +275,7 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
                 })
                 .collect();
             let end = start + width * counts.len() as f64;
-            let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
-            let (m, sd) = mean_sd(&finite);
-            let curve = (*normal_curve && sd.is_finite() && sd > 0.0).then(|| {
-                let n = finite.len() as f64;
-                let (a, b) = ((m - 3.5 * sd).min(start), (m + 3.5 * sd).max(end));
-                (0..=200)
-                    .map(|i| {
-                        let x = a + (b - a) * i as f64 / 200.0;
-                        let z = (x - m) / sd;
-                        [
-                            x,
-                            n * width * (-0.5 * z * z).exp()
-                                / (sd * (2.0 * std::f64::consts::PI).sqrt()),
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-            });
+            let curve = (!st.curve.is_empty()).then(|| st.curve.clone());
             let xstep = histogram_x_step(start, end);
             axes(base, x_label, "Frequency", Some(xstep), None)
                 .include_y(0.0)
@@ -241,9 +288,9 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
             // Legend at the side.
             let lp = ui.painter().clone();
             let mut ly = plot_rect.top() + 12.0;
-            for line in histogram_legend(values) {
+            for line in &st.legend {
                 let g = lp.layout_job(marked_job(
-                    &line,
+                    line,
                     "",
                     SUB_SIZE,
                     LABEL_COLOR,
@@ -256,7 +303,7 @@ pub fn paint_chart(ui: &mut Ui, c: &Chart, rect: Rect, id: egui::Id) {
                     ui,
                     egui::Rect::from_min_size(at, g.size()),
                     id.with(("legend", ly as i32)),
-                    &line,
+                    line,
                 );
                 ly += g.size().y + 2.0;
             }

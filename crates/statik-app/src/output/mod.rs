@@ -16,7 +16,7 @@ pub mod outline;
 pub mod table_view;
 
 use crate::state::{AppState, Message};
-use chart_view::{chart_size, paint_chart};
+use chart_view::{HistogramStats, chart_size, histogram_stats, paint_chart_with};
 use egui::{
     Align, Color32, Context, Event, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, UserData,
     Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, pos2, vec2,
@@ -106,11 +106,23 @@ pub struct OutputView {
     /// Table measurements and item sizes, so big tables are only painted where visible.
     metrics: HashMap<ItemRef, Arc<TableMetrics>>,
     sizes: HashMap<ItemRef, Vec2>,
+    /// Histogram figures per chart item, computed once.
+    hists: HashMap<ItemRef, Arc<HistogramStats>>,
+    /// Text items (log, title, notes, warnings): the size of the whole row and where the
+    /// item sits in it, measured the first time it is drawn; off-screen rows are then only
+    /// allocated, not laid out.
+    text_rows: HashMap<ItemRef, (Vec2, Rect)>,
     /// pixels_per_point and number of entries the caches were made for.
     cache_key: (u32, usize),
     /// The viewer is a window of its own and has the keyboard focus: queued messages are
     /// shown there instead of in the Data Editor (set every frame).
     pub hosts_messages: bool,
+    /// Text items (log, title, notes, warnings) laid out in the last frame (tests).
+    #[doc(hidden)]
+    pub text_layouts: usize,
+    /// Times histogram figures (bins, curve, legend) were computed (tests).
+    #[doc(hidden)]
+    pub histogram_stats_computed: usize,
 }
 
 /// Menu choices the app handles (file dialogs, other windows).
@@ -270,6 +282,8 @@ fn document(ui: &mut Ui, state: &mut AppState) {
     if v.cache_key.0 != ppp || v.cache_key.1 > state.outputs.len() {
         v.metrics.clear();
         v.sizes.clear();
+        v.hists.clear();
+        v.text_rows.clear();
     }
     v.cache_key = (ppp, state.outputs.len());
     let mut actions = Vec::new();
@@ -281,6 +295,7 @@ fn document(ui: &mut Ui, state: &mut AppState) {
         .show(ui, |ui| {
             v.doc_clip = Some(ui.clip_rect());
             v.item_rects.clear();
+            v.text_layouts = 0;
             ui.spacing_mut().item_spacing.y = 0.0;
             for (e, entry) in state.outputs.iter().enumerate() {
                 let r = ItemRef::entry(e);
@@ -294,13 +309,19 @@ fn document(ui: &mut Ui, state: &mut AppState) {
                         );
                     }
                 } else {
-                    let resp = log_block(ui, &entry.log, Id::new(("log", e)));
+                    let resp = text_row(ui, v, r, |ui| {
+                        log_block(ui, &entry.log, Id::new(("log", e)))
+                    });
                     item_frame(ui, v, r, &resp, scroll_to, shooting, &mut actions, false);
                     ui.add_space(ITEM_GAP);
                 }
                 for (i, it) in entry.items.iter().enumerate() {
                     let r = ItemRef::item(e, i);
-                    let resp = draw_item(ui, v, r, it);
+                    let resp = if is_text_item(it) {
+                        text_row(ui, v, r, |ui| draw_text_item(ui, r, it))
+                    } else {
+                        draw_item(ui, v, r, it)
+                    };
                     let image = matches!(it, OutputItem::Chart(_));
                     item_frame(ui, v, r, &resp, scroll_to, shooting, &mut actions, image);
                     ui.add_space(ITEM_GAP);
@@ -378,6 +399,37 @@ fn item_frame(
     }
 }
 
+fn is_text_item(it: &OutputItem) -> bool {
+    matches!(
+        it,
+        OutputItem::Title(_) | OutputItem::Notes(_) | OutputItem::Warning(_)
+    )
+}
+
+/// Draw a text item through [`OutputView::text_rows`]: once measured, a row outside the
+/// visible part is allocated at its size without laying the text out.
+fn text_row(
+    ui: &mut Ui,
+    v: &mut OutputView,
+    r: ItemRef,
+    draw: impl FnOnce(&mut Ui) -> egui::Response,
+) -> egui::Response {
+    let top = ui.cursor().min;
+    if let Some(&(size, inner)) = v.text_rows.get(&r)
+        && !ui.is_rect_visible(Rect::from_min_size(top, size))
+    {
+        let (_, mut resp) = ui.allocate_exact_size(size, Sense::hover());
+        resp.rect = inner.translate(top.to_vec2());
+        return resp;
+    }
+    v.text_layouts += 1;
+    let resp = draw(ui);
+    let row = Rect::from_min_max(top, pos2(resp.rect.right(), ui.cursor().min.y));
+    v.text_rows
+        .insert(r, (row.size(), resp.rect.translate(-top.to_vec2())));
+    resp
+}
+
 fn log_block(ui: &mut Ui, log: &str, id: Id) -> egui::Response {
     ui.horizontal(|ui| {
         ui.add_space(INDENT);
@@ -396,6 +448,61 @@ fn log_block(ui: &mut Ui, log: &str, id: Id) -> egui::Response {
 }
 
 fn draw_item(ui: &mut Ui, v: &mut OutputView, r: ItemRef, it: &OutputItem) -> egui::Response {
+    let id = Id::new(("output_item_body", r.entry, r.item));
+    match it {
+        OutputItem::Title(_) | OutputItem::Notes(_) | OutputItem::Warning(_) => {
+            draw_text_item(ui, r, it)
+        }
+        OutputItem::Table(t) => indented(ui, |ui| {
+            let m = match v.metrics.get(&r) {
+                Some(m) => m.clone(),
+                None => {
+                    let m = Arc::new(measure(ui, t));
+                    v.metrics.insert(r, m.clone());
+                    m
+                }
+            };
+            let (rect, resp) = ui.allocate_exact_size(m.size, Sense::hover());
+            if ui.is_rect_visible(rect) {
+                paint_table(ui, t, &m, rect.min, id);
+            }
+            resp
+        }),
+        OutputItem::Chart(c) => indented(ui, |ui| {
+            let size = *v.sizes.entry(r).or_insert_with(|| chart_size(ui, c));
+            let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+            if ui.is_rect_visible(rect) {
+                let hist = match c {
+                    output_model::Chart::Histogram {
+                        values,
+                        normal_curve,
+                        ..
+                    } => Some(
+                        v.hists
+                            .entry(r)
+                            .or_insert_with(|| {
+                                v.histogram_stats_computed += 1;
+                                Arc::new(histogram_stats(values, *normal_curve))
+                            })
+                            .clone(),
+                    ),
+                    _ => None,
+                };
+                paint_chart_with(ui, c, rect, id, hist.as_deref());
+                // The chart as one image node named by its title (only while it is drawn).
+                let n = ui.interact(rect, id.with("image"), Sense::hover());
+                let title = c.title().to_owned();
+                n.widget_info(move || {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &title)
+                });
+            }
+            resp
+        }),
+    }
+}
+
+/// A title, notes or warning item.
+fn draw_text_item(ui: &mut Ui, r: ItemRef, it: &OutputItem) -> egui::Response {
     let id = Id::new(("output_item_body", r.entry, r.item));
     match it {
         OutputItem::Title(t) => {
@@ -426,35 +533,7 @@ fn draw_item(ui: &mut Ui, v: &mut OutputView, r: ItemRef, it: &OutputItem) -> eg
             resp
         }),
         OutputItem::Warning(t) => indented(ui, |ui| warning_box(ui, t, id)),
-        OutputItem::Table(t) => indented(ui, |ui| {
-            let m = match v.metrics.get(&r) {
-                Some(m) => m.clone(),
-                None => {
-                    let m = Arc::new(measure(ui, t));
-                    v.metrics.insert(r, m.clone());
-                    m
-                }
-            };
-            let (rect, resp) = ui.allocate_exact_size(m.size, Sense::hover());
-            if ui.is_rect_visible(rect) {
-                paint_table(ui, t, &m, rect.min, id);
-            }
-            resp
-        }),
-        OutputItem::Chart(c) => indented(ui, |ui| {
-            let size = *v.sizes.entry(r).or_insert_with(|| chart_size(ui, c));
-            let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
-            if ui.is_rect_visible(rect) {
-                paint_chart(ui, c, rect, id);
-                // The chart as one image node named by its title (only while it is drawn).
-                let n = ui.interact(rect, id.with("image"), Sense::hover());
-                let title = c.title().to_owned();
-                n.widget_info(move || {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &title)
-                });
-            }
-            resp
-        }),
+        OutputItem::Table(_) | OutputItem::Chart(_) => unreachable!("not a text item"),
     }
 }
 

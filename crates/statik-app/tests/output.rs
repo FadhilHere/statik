@@ -440,3 +440,52 @@ fn open_output_refuses_huge_files() {
     assert!(s.outputs.is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Histogram bins, normal curve and legend are computed once, not on every frame.
+#[test]
+fn histogram_figures_are_computed_once() {
+    let _render = common::render_lock();
+    let mut h = viewer(regression_state(), egui::vec2(1100.0, 2600.0));
+    h.run();
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(h.state().viewer.histogram_stats_computed, 1);
+    assert_eq!(
+        h.query_all_by_role_and_label(Role::Image, "Histogram")
+            .count(),
+        1
+    );
+    assert!(count(&h, "N = 60") >= 1, "legend still drawn");
+}
+
+/// Log / title / notes / warning items are measured once; off-screen ones are not laid out.
+#[test]
+fn off_screen_text_items_are_not_laid_out() {
+    let _render = common::render_lock();
+    let mut s = AppState::new();
+    for i in 0..300 {
+        s.outputs.push(statik_app::OutputEntry {
+            title: "Log".into(),
+            items: vec![
+                OutputItem::Title(format!("Title {i}")),
+                OutputItem::Warning(format!("Warning {i}")),
+            ],
+            log: format!(
+                "COMPUTE v{i}=1.
+EXECUTE."
+            ),
+        });
+    }
+    let mut h = viewer(s, egui::vec2(1000.0, 600.0));
+    h.run();
+    h.step();
+    let n = h.state().viewer.text_layouts;
+    assert!(n > 0 && n < 60, "{n} text items laid out in one frame");
+    assert!(h.query_by_label("Title 0").is_some());
+    assert!(h.query_by_label("Title 299").is_none());
+    // Scrolling to the end still finds the last items at the right place.
+    h.state_mut().viewer.scroll_to = Some(ItemRef::item(299, 1));
+    h.run();
+    assert!(h.query_by_label("Title 299").is_some());
+}
