@@ -159,7 +159,11 @@ fn icon_rect(ui: &mut Ui) -> Rect {
 /// Measure icon: a ruler (Scale), rising bars (Ordinal), three dots (Nominal).
 pub fn measure_icon(ui: &mut Ui, m: Measure) {
     let r = icon_rect(ui);
-    let p = ui.painter();
+    paint_measure_icon(ui.painter(), r, m);
+}
+
+/// Paint the measure icon of [`measure_icon`] into a 14×14 rect (variable lists in dialogs).
+pub fn paint_measure_icon(p: &egui::Painter, r: Rect, m: Measure) {
     let dark = Color32::from_gray(60);
     match m {
         Measure::Scale => {

@@ -12,10 +12,12 @@
 //! [`AppState::finish`] only swaps data in, replaces the document or clears `dirty` if the
 //! revision is unchanged. Otherwise the newer in-memory state is kept and a conflict message is
 //! queued.
+use crate::dialogs::DialogHost;
 use crate::edit::EditOp;
 use crate::editor::EditorState;
 use crate::jobs::{Job, JobResult, SaveKind};
 use crate::output::{ItemRef, OutputView};
+use crate::syntax::SyntaxWindow;
 use dataset::Dataset;
 use output_model::OutputItem;
 use sav_io::CsvOptions;
@@ -118,8 +120,8 @@ impl Message {
     }
 }
 
-/// Dialogs opened from the menus. Later tasks implement them; until then opening one shows a
-/// "not available yet" message.
+/// Dialogs opened from the menus. The Analyze dialogs are in [`crate::dialogs`]; Compute and
+/// Recode (Task 6) still show a "not available yet" message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DialogKind {
     Frequencies,
@@ -256,6 +258,10 @@ pub struct AppState {
     pub(crate) redo_stack: Vec<EditOp>,
     /// UI state of the Output viewer (selection, scroll target, pending image copy).
     pub viewer: OutputView,
+    /// The open procedure dialog and the remembered settings of every dialog.
+    pub dialogs: DialogHost,
+    /// The Syntax window (text pasted by dialogs).
+    pub syntax: SyntaxWindow,
 }
 
 impl Default for AppState {
@@ -293,6 +299,8 @@ impl AppState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             viewer: OutputView::default(),
+            dialogs: DialogHost::default(),
+            syntax: SyntaxWindow::default(),
         }
     }
 
@@ -569,6 +577,10 @@ impl AppState {
                 Done(Ok(()))
             }
             Command::OpenDialog(kind) => {
+                self.commit_pending_edits();
+                if self.dialogs.open(kind) {
+                    return Done(Ok(()));
+                }
                 self.push_message(Message::info(
                     kind.title(),
                     format!("{} is not available yet.", kind.title()),

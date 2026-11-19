@@ -12,11 +12,13 @@
 //! on `state.outputs` or the document.
 use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::message::message_box;
+use crate::dialogs::show_dialogs;
 use crate::editor::View;
 use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
 use crate::output::{OutputAction, output_window};
 use crate::state::{AppState, Command, Message, Prepared};
+use crate::syntax::syntax_window;
 use crate::variable_view::{commit_var_edit, variable_view};
 use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand, ViewportId};
 use std::path::PathBuf;
@@ -196,6 +198,8 @@ impl StatikApp {
             self.start(job, &ctx);
         }
         let busy = self.busy().is_some();
+        // A procedure dialog is modal: the menus and the Data Editor wait until it closes.
+        let modal = self.state.dialogs.is_open();
 
         let title = self.state.title();
         if title != self.title_sent {
@@ -205,10 +209,10 @@ impl StatikApp {
 
         let mut action = None;
         egui::Panel::top("menu").show(ui, |ui| {
-            action = menu_bar(ui, &self.state, !busy);
+            action = menu_bar(ui, &self.state, !busy && !modal);
         });
 
-        if !busy && self.state.message().is_none() {
+        if !busy && !modal && self.state.message().is_none() {
             ui.input_mut(|i| {
                 if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)) {
                     action = Some(MenuAction::OpenData);
@@ -246,7 +250,7 @@ impl StatikApp {
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
             // Disabled while busy, so views cannot edit the data a job is working on.
-            ui.add_enabled_ui(!busy, |ui| {
+            ui.add_enabled_ui(!busy && !modal, |ui| {
                 let state = &mut self.state;
                 egui::Panel::bottom("view_tabs").show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -277,6 +281,9 @@ impl StatikApp {
         if self.state.show_output {
             output_action = output_window(&ctx, &mut self.state, busy);
         }
+
+        show_dialogs(&ctx, &mut self.state, busy);
+        syntax_window(&ctx, &mut self.state);
 
         if let Some(msg) = self.state.message()
             && message_box(&ctx, msg)

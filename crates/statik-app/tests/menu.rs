@@ -156,12 +156,14 @@ fn analyze_regression_linear_enabled_glm_disabled() {
     );
     linear.click();
     h.run();
-    // Not implemented yet: a message names the dialog.
-    let m = h.state().state.message().cloned().expect("message");
-    assert_eq!(m.title, "Linear Regression");
-    h.get_by_label("OK").click();
+    // Opens the Linear Regression dialog.
+    assert_eq!(
+        h.state().state.dialogs.open,
+        Some(statik_app::DialogKind::LinearRegression)
+    );
+    h.get_by_label("Cancel").click();
     h.run();
-    assert!(h.state().state.message().is_none());
+    assert!(h.state().state.dialogs.open.is_none());
 }
 
 #[test]

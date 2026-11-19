@@ -10,6 +10,7 @@ pub mod jobs;
 pub mod menu;
 pub mod output;
 pub mod state;
+pub mod syntax;
 pub mod variable_view;
 
 pub use app::StatikApp;
