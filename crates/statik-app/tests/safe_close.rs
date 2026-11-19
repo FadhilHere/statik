@@ -34,6 +34,9 @@ fn skripsi() -> AppState {
         Default::default(),
     ))
     .unwrap();
+    // These tests are about the data; the import's log output counts as saved here (the
+    // output question has its own tests below).
+    s.output_dirty = false;
     s
 }
 
@@ -121,6 +124,15 @@ fn handle(h: &mut Harness<'_, StatikApp>, a: MenuAction) {
     h.run();
 }
 
+/// The save at exit logged a SAVE command to the output, so the output question follows.
+fn answer_no_to_the_output_question(h: &mut Harness<'_, StatikApp>) {
+    assert!(!h.state().closing());
+    assert!(h.state().output_prompt());
+    h.get_by_label("Save contents of output viewer to Output1?");
+    h.get_by_label("No").click();
+    h.run();
+}
+
 fn prompt_buttons_shown(h: &Harness<'_, StatikApp>) {
     h.get_by_label(PROMPT);
     for b in ["Yes", "No", "Cancel"] {
@@ -200,6 +212,7 @@ fn close_yes_saves_the_sav_file_then_closes() {
     h.run();
     assert!(sc.asked().is_empty(), "a .sav document is saved in place");
     assert!(!h.state().state.doc.dirty());
+    answer_no_to_the_output_question(&mut h);
     assert!(h.state().closing());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -218,6 +231,7 @@ fn close_yes_on_imported_data_asks_for_a_file_name() {
     assert!(matches!(sc.asked()[..], [PickRequest::SaveData { .. }]));
     assert!(dir.join("skripsi.sav").exists());
     assert!(!h.state().state.doc.dirty());
+    answer_no_to_the_output_question(&mut h);
     assert!(h.state().closing());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -413,4 +427,185 @@ fn close_commits_a_pending_cell_edit_first() {
     let cmds = request_close(&mut h);
     assert!(cmds.contains(&ViewportCommand::CancelClose), "{cmds:?}");
     h.get_by_label(PROMPT);
+}
+
+// ---------------------------------------------------------------------------------------------
+// "Save contents of output viewer to Output1?" (at exit only)
+// ---------------------------------------------------------------------------------------------
+
+const OUTPUT_PROMPT: &str = "Save contents of output viewer to Output1?";
+
+/// skripsi (clean data) with unsaved output.
+fn with_output() -> AppState {
+    let mut s = skripsi();
+    statik_app::run_procedure(
+        &mut s,
+        "Frequencies",
+        |_| {
+            statik_app::ProcOutput::output(vec![output_model::OutputItem::Title(
+                "Frequencies".into(),
+            )])
+        },
+        "FREQUENCIES x1.".into(),
+    );
+    assert!(s.output_dirty);
+    s
+}
+
+#[test]
+fn close_with_unsaved_output_asks_and_no_closes() {
+    let _render = common::render_lock();
+    let sc = Script::default();
+    let mut h = app_with(with_output(), &sc);
+    let cmds = request_close(&mut h);
+    assert!(cmds.contains(&ViewportCommand::CancelClose), "{cmds:?}");
+    assert!(h.state().output_prompt());
+    h.get_by_label(OUTPUT_PROMPT);
+    for b in ["Yes", "No", "Cancel"] {
+        h.get_by_label(b);
+    }
+    h.get_by_label("No").click();
+    h.step();
+    assert!(root_commands(&h).contains(&ViewportCommand::Close));
+    h.run();
+    assert!(h.state().closing());
+    assert!(sc.asked().is_empty());
+}
+
+#[test]
+fn close_with_unsaved_output_cancel_keeps_the_app_open() {
+    let _render = common::render_lock();
+    let sc = Script::default();
+    let mut h = app_with(with_output(), &sc);
+    request_close(&mut h);
+    h.get_by_label("Cancel").click();
+    h.run();
+    assert!(!h.state().closing());
+    assert!(!h.state().output_prompt());
+    assert!(h.query_by_label(OUTPUT_PROMPT).is_none());
+    assert!(h.state().state.output_dirty);
+    // Asked again next time.
+    request_close(&mut h);
+    h.get_by_label(OUTPUT_PROMPT);
+}
+
+#[test]
+fn close_with_unsaved_output_yes_saves_it_then_closes() {
+    let _render = common::render_lock();
+    let dir = tmp_dir("output-yes");
+    let sc = Script::new(vec![Some(dir.join("hasil"))]);
+    let mut h = app_with(with_output(), &sc);
+    request_close(&mut h);
+    h.get_by_label("Yes").click();
+    h.run();
+    assert_eq!(
+        sc.asked(),
+        vec![PickRequest::SaveOutput {
+            file_name: "Output1.stko".into()
+        }]
+    );
+    assert!(dir.join("hasil.stko").exists());
+    assert!(!h.state().state.output_dirty);
+    assert!(h.state().closing());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn close_with_unsaved_output_yes_then_cancelled_file_dialog_stays() {
+    let _render = common::render_lock();
+    let sc = Script::new(vec![None]);
+    let mut h = app_with(with_output(), &sc);
+    request_close(&mut h);
+    h.get_by_label("Yes").click();
+    h.run();
+    assert_eq!(sc.asked().len(), 1);
+    assert!(!h.state().closing());
+    assert!(h.state().state.output_dirty);
+    assert!(h.query_by_label(OUTPUT_PROMPT).is_none());
+}
+
+#[test]
+fn close_with_unsaved_output_yes_with_a_failed_save_stays() {
+    let _render = common::render_lock();
+    let dir = tmp_dir("output-fail");
+    let sc = Script::new(vec![Some(dir.join("no").join("such").join("x.stko"))]);
+    let mut h = app_with(with_output(), &sc);
+    request_close(&mut h);
+    h.get_by_label("Yes").click();
+    h.run();
+    assert!(!h.state().closing());
+    h.get_by_label("Error");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn file_exit_asks_about_data_first_then_output() {
+    let _render = common::render_lock();
+    let sc = Script::default();
+    let mut s = with_output();
+    set_first_cell(&mut s, 42.0);
+    let mut h = app_with(s, &sc);
+    handle(&mut h, MenuAction::Cmd(Command::Exit));
+    h.get_by_label(PROMPT);
+    assert!(
+        h.query_by_label(OUTPUT_PROMPT).is_none(),
+        "one question at a time"
+    );
+    h.get_by_label("No").click();
+    h.run();
+    assert!(!h.state().closing());
+    h.get_by_label(OUTPUT_PROMPT);
+    h.get_by_label("No").click();
+    h.run();
+    assert!(h.state().closing());
+}
+
+#[test]
+fn saved_output_is_not_asked_about() {
+    let _render = common::render_lock();
+    let dir = tmp_dir("output-saved");
+    let mut s = with_output();
+    s.save_output(&dir.join("o")).unwrap();
+    let sc = Script::default();
+    let mut h = app_with(s, &sc);
+    let cmds = request_close(&mut h);
+    assert!(!cmds.contains(&ViewportCommand::CancelClose));
+    assert!(h.state().closing());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn new_and_open_data_do_not_ask_about_output() {
+    let _render = common::render_lock();
+    let sc = Script::new(vec![None]);
+    let mut h = app_with(with_output(), &sc);
+    handle(&mut h, MenuAction::Cmd(Command::New));
+    assert!(!h.state().output_prompt());
+    assert!(h.query_by_label(OUTPUT_PROMPT).is_none());
+    assert_eq!(h.state().state.doc.ds().n_vars(), 0);
+    handle(&mut h, MenuAction::OpenData);
+    assert!(h.query_by_label(OUTPUT_PROMPT).is_none());
+    assert_eq!(sc.asked(), vec![PickRequest::OpenData]);
+    // The viewer keeps its output.
+    assert!(h.state().state.output_dirty);
+}
+
+/// The keyboard is ignored under the output question too.
+#[test]
+fn keys_are_blocked_under_the_output_question() {
+    let _render = common::render_lock();
+    let sc = Script::default();
+    let mut s = with_output();
+    s.editor.jump_to(0, 1);
+    let before = s.doc.ds().numeric(dataset::VarId(1))[0];
+    let mut h = app_with(s, &sc);
+    request_close(&mut h);
+    h.get_by_label(OUTPUT_PROMPT);
+    h.key_press(egui::Key::Delete);
+    h.run();
+    h.event(egui::Event::Text("y".into()));
+    h.run();
+    let st = &h.state().state;
+    assert_eq!(st.doc.ds().numeric(dataset::VarId(1))[0], before);
+    assert!(st.editor.editing.is_none());
 }

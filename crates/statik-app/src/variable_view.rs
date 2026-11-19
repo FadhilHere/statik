@@ -556,7 +556,12 @@ pub fn variable_view(ui: &mut Ui, state: &mut AppState) {
             });
         });
 
+    let enabled = ui.is_enabled();
     for a in acts {
+        // Disabled (a job runs): the field losing focus must not change the data meanwhile.
+        if !enabled && matches!(a, Act::Commit) {
+            continue;
+        }
         match a {
             Act::Select(i) => {
                 commit_var_edit(state);
@@ -963,7 +968,9 @@ fn show_dialog(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn values_add(state: &mut AppState, v: &mut ValuesDialog) {
+/// Add the Value / Label fields to the list (a value already in the list gets the new label).
+/// False if the input was rejected (a message is queued).
+fn values_add(state: &mut AppState, v: &mut ValuesDialog) -> bool {
     let label = v.label.trim().to_string();
     let key = if v.numeric {
         match parse_number(&v.value) {
@@ -976,7 +983,7 @@ fn values_add(state: &mut AppState, v: &mut ValuesDialog) {
                         v.value.trim()
                     ),
                 ));
-                return;
+                return false;
             }
         }
     } else {
@@ -987,7 +994,7 @@ fn values_add(state: &mut AppState, v: &mut ValuesDialog) {
             "Value Labels",
             "Enter a label for the value.",
         ));
-        return;
+        return false;
     }
     match v.list.iter().position(|(k, _)| *k == key) {
         Some(p) => v.list[p].1 = label,
@@ -1001,15 +1008,17 @@ fn values_add(state: &mut AppState, v: &mut ValuesDialog) {
     v.value.clear();
     v.label.clear();
     v.selected = None;
+    true
 }
 
+/// Change the selected entry to the Value / Label fields. Changing it to a value that already
+/// has a label replaces that label and drops the selected entry (as SPSS does).
 fn values_change(state: &mut AppState, v: &mut ValuesDialog) {
     if let Some(s) = v.selected.take() {
         let old = v.list.remove(s);
-        let before = v.list.len();
-        values_add(state, v);
-        if v.list.len() == before {
+        if !values_add(state, v) {
             v.list.insert(s, old); // rejected: put it back
+            v.selected = Some(s);
         }
     }
 }

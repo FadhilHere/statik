@@ -50,8 +50,26 @@ pub enum Answer {
 /// The modal "Save contents of data editor to <name>?" box with Yes / No / Cancel. Escape (or
 /// a click outside) is Cancel. `None` while unanswered.
 pub fn save_changes_box(ctx: &egui::Context, name: &str) -> Option<Answer> {
+    question_box(
+        ctx,
+        "statik-save-changes",
+        &format!("Save contents of data editor to {name}?"),
+    )
+}
+
+/// The modal "Save contents of output viewer to <name>?" box (at exit), like
+/// [`save_changes_box`].
+pub fn save_output_box(ctx: &egui::Context, name: &str) -> Option<Answer> {
+    question_box(
+        ctx,
+        "statik-save-output",
+        &format!("Save contents of output viewer to {name}?"),
+    )
+}
+
+fn question_box(ctx: &egui::Context, id: &str, question: &str) -> Option<Answer> {
     let mut answer = None;
-    let resp = egui::Modal::new(egui::Id::new("statik-save-changes")).show(ctx, |ui| {
+    let resp = egui::Modal::new(egui::Id::new(id)).show(ctx, |ui| {
         ui.set_min_width(320.0);
         ui.set_max_width(520.0);
         ui.heading("Statik");
@@ -63,7 +81,7 @@ pub fn save_changes_box(ctx: &egui::Context, name: &str) -> Option<Answer> {
                     .size(22.0)
                     .color(egui::Color32::from_rgb(0xd8, 0x9b, 0x00)),
             );
-            ui.label(format!("Save contents of data editor to {name}?"));
+            ui.label(question);
         });
         ui.separator();
         ui.horizontal(|ui| {

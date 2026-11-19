@@ -18,19 +18,33 @@
 //! has succeeded; No continues; Cancel drops it (a window close is cancelled with
 //! `ViewportCommand::CancelClose`). File dialogs go through a replaceable picker
 //! ([`StatikApp::with_picker`]) so tests can script them.
+//!
+//! **Unsaved output.** At exit (window close or File ▸ Exit), once the data question is dealt
+//! with, unsaved output ([`AppState::output_dirty`]) is asked about as in SPSS: "Save contents
+//! of output viewer to Output1?" Yes asks for a `.stko` file name and exits only once it is
+//! saved; No exits; Cancel stays. New / Open data do not ask (the viewer keeps its output).
+//!
+//! **Modal questions block the keyboard.** While a message, a save question, the recovery
+//! question, a procedure dialog or a Variable View dialog is up (or a job runs), the Data View
+//! keys and the Ctrl+O / Ctrl+S / Ctrl+Z / Ctrl+Y shortcuts are ignored
+//! ([`crate::editor::EditorState::blocked`]).
 use crate::autosave::{Autosave, Orphan};
 use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::import::show_import;
-use crate::dialogs::message::{Answer, message_box, recovery_box, save_changes_box};
+use crate::dialogs::message::{
+    Answer, message_box, recovery_box, save_changes_box, save_output_box,
+};
 use crate::dialogs::show_dialogs;
 use crate::editor::View;
 use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
-use crate::output::{OutputAction, output_window};
+use crate::output::{OUTPUT_VIEWPORT, OutputAction, output_window};
 use crate::state::{AppState, Command, Message, Prepared};
 use crate::syntax::syntax_window;
 use crate::variable_view::{commit_var_edit, variable_view};
-use egui::{Context, Key, KeyboardShortcut, Modifiers, Ui, ViewportCommand, ViewportId};
+use egui::{
+    Context, Id, Key, KeyboardShortcut, LayerId, Modifiers, Order, Ui, ViewportCommand, ViewportId,
+};
 use std::path::PathBuf;
 
 /// An action that replaces or closes the document, so it asks about unsaved changes first.
@@ -62,7 +76,15 @@ pub enum PickRequest {
         file_name: String,
         dir: Option<PathBuf>,
     },
+    /// Output viewer File ▸ Save Output As (or Yes at "Save contents of output viewer"): a
+    /// `.stko` file name, suggesting `file_name`.
+    SaveOutput { file_name: String },
+    /// Output viewer File ▸ Open Output: a `.stko` file.
+    OpenOutput,
 }
+
+/// The output document's name in the save-output question (SPSS: "Output1").
+pub const OUTPUT_NAME: &str = "Output1";
 
 /// Shows a file dialog and returns the chosen path (`None` = cancelled).
 pub type Picker = Box<dyn FnMut(&PickRequest) -> Option<PathBuf>>;
@@ -79,6 +101,8 @@ pub struct StatikApp {
     after_save: Option<Guarded>,
     /// The action to continue on the next frame (its save succeeded).
     resume: Option<Guarded>,
+    /// "Save contents of output viewer to Output1?" is being asked (at exit).
+    output_prompt: bool,
     /// The window may close: the user has dealt with unsaved changes.
     close_ok: bool,
     /// Autosave of unsaved changes ([`crate::autosave`]); off unless set with
@@ -135,6 +159,15 @@ fn rfd_pick(req: &PickRequest) -> Option<PathBuf> {
             }
             d.save_file()
         }
+        PickRequest::SaveOutput { file_name } => rfd::FileDialog::new()
+            .set_title("Save Output As")
+            .add_filter("Statik Output (*.stko)", &["stko"])
+            .set_file_name(file_name)
+            .save_file(),
+        PickRequest::OpenOutput => rfd::FileDialog::new()
+            .set_title("Open Output")
+            .add_filter("Statik Output (*.stko)", &["stko"])
+            .pick_file(),
     }
 }
 
@@ -148,6 +181,7 @@ impl StatikApp {
             save_prompt: None,
             after_save: None,
             resume: None,
+            output_prompt: false,
             close_ok: false,
             autosave: Autosave::default(),
             recovery: None,
@@ -190,6 +224,11 @@ impl StatikApp {
     /// The action waiting at the "Save contents of data editor" question, if it is asked.
     pub fn save_prompt(&self) -> Option<Guarded> {
         self.save_prompt
+    }
+
+    /// "Save contents of output viewer to Output1?" is being asked.
+    pub fn output_prompt(&self) -> bool {
+        self.output_prompt
     }
 
     /// The window is closing (or may close): unsaved changes were dealt with.
@@ -292,8 +331,12 @@ impl StatikApp {
     fn proceed(&mut self, action: Guarded, ctx: &Context) {
         match action {
             Guarded::Exit => {
-                self.close_ok = true;
-                ctx.send_viewport_cmd(ViewportCommand::Close);
+                if self.output_unsaved() {
+                    self.output_prompt = true;
+                } else {
+                    self.close_ok = true;
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
             }
             Guarded::New => self.dispatch(Command::New, ctx),
             Guarded::Open => {
@@ -312,6 +355,42 @@ impl StatikApp {
                 }
             }
         }
+    }
+
+    /// There is output that was not saved (asked about at exit).
+    fn output_unsaved(&self) -> bool {
+        self.state.output_dirty && !self.state.outputs.is_empty()
+    }
+
+    /// The answer to "Save contents of output viewer to Output1?" (at exit).
+    fn answer_output_prompt(&mut self, answer: Answer, ctx: &Context) {
+        self.output_prompt = false;
+        let close = match answer {
+            Answer::Yes => match self.pick_output_path() {
+                Some(p) => match self.state.save_output(&p) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        self.state.push_message(Message::error(e));
+                        false
+                    }
+                },
+                None => false,
+            },
+            Answer::No => true,
+            Answer::Cancel => false,
+        };
+        if close {
+            self.close_ok = true;
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+        } else {
+            self.state.cancel_exit();
+        }
+    }
+
+    fn pick_output_path(&mut self) -> Option<PathBuf> {
+        (self.picker)(&PickRequest::SaveOutput {
+            file_name: format!("{OUTPUT_NAME}.stko"),
+        })
     }
 
     /// The answer to "Save contents of data editor to <name>?" for `action`.
@@ -442,6 +521,10 @@ impl StatikApp {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 self.state.cancel_exit();
                 self.save_prompt = Some(Guarded::Exit);
+            } else if self.output_unsaved() {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.state.cancel_exit();
+                self.output_prompt = true;
             } else {
                 self.close_ok = true;
             }
@@ -449,6 +532,16 @@ impl StatikApp {
         let busy = self.busy().is_some();
         // A procedure dialog is modal: the menus and the Data Editor wait until it closes.
         let modal = self.state.dialogs.is_open() || self.state.import.is_some();
+        // Any modal question or dialog: the views and the shortcuts ignore the keyboard (egui
+        // modals block the mouse, not raw key events).
+        let blocked = busy
+            || modal
+            || self.state.message().is_some()
+            || self.save_prompt.is_some()
+            || self.output_prompt
+            || self.recovery.is_some()
+            || self.state.editor.var_dialog.is_some();
+        self.state.editor.blocked = blocked;
 
         let title = self.state.title();
         if title != self.title_sent {
@@ -461,7 +554,7 @@ impl StatikApp {
             action = menu_bar(ui, &self.state, !busy && !modal);
         });
 
-        if !busy && !modal && self.state.message().is_none() && self.save_prompt.is_none() {
+        if !blocked {
             ui.input_mut(|i| {
                 if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)) {
                     action = Some(MenuAction::OpenData);
@@ -470,7 +563,7 @@ impl StatikApp {
                 }
             });
             // Undo/redo of data edits, unless a text field (cell editor, dialog) has the keys.
-            if !ctx.text_edit_focused() && self.state.editor.var_dialog.is_none() {
+            if !ctx.text_edit_focused() {
                 ui.input_mut(|i| {
                     let redo = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
                     let redo2 =
@@ -535,13 +628,24 @@ impl StatikApp {
         let mut output_action = None;
         if self.state.show_output {
             output_action = output_window(&ctx, &mut self.state, busy);
+            if std::mem::take(&mut self.state.raise_output) {
+                // New output: bring the viewer to the front (its own window, or the embedded
+                // window when the backend cannot open one).
+                let id = ViewportId::from_hash_of(OUTPUT_VIEWPORT);
+                ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+                ctx.move_to_top(LayerId::new(Order::Middle, Id::new(id)));
+            }
+        } else {
+            self.state.viewer.hosts_messages = false;
         }
 
         show_dialogs(&ctx, &mut self.state, busy);
         show_import(&ctx, &mut self.state, busy);
         syntax_window(&ctx, &mut self.state);
 
-        if let Some(msg) = self.state.message()
+        // Messages are shown in one window: the Output viewer when it has the focus, else here.
+        if !self.state.viewer.hosts_messages
+            && let Some(msg) = self.state.message()
             && message_box(&ctx, msg)
         {
             self.state.dismiss_message();
@@ -580,6 +684,17 @@ impl StatikApp {
             }
         }
 
+        // At exit, after the data question: "Save contents of output viewer to Output1?".
+        if self.output_prompt
+            && self.save_prompt.is_none()
+            && self.recovery.is_none()
+            && self.busy().is_none()
+            && self.state.message().is_none()
+            && let Some(answer) = save_output_box(&ctx, OUTPUT_NAME)
+        {
+            self.answer_output_prompt(answer, &ctx);
+        }
+
         if let Some(a) = action {
             self.handle(a, &ctx);
         }
@@ -598,21 +713,14 @@ impl StatikApp {
     pub fn handle_output(&mut self, action: OutputAction, ctx: &Context) {
         match action {
             OutputAction::SaveOutput => {
-                let d = rfd::FileDialog::new()
-                    .set_title("Save Output As")
-                    .add_filter("Statik Output (*.stko)", &["stko"])
-                    .set_file_name("Output1.stko");
-                if let Some(p) = d.save_file()
+                if let Some(p) = self.pick_output_path()
                     && let Err(e) = self.state.save_output(&p)
                 {
                     self.state.push_message(Message::error(e));
                 }
             }
             OutputAction::OpenOutput => {
-                let d = rfd::FileDialog::new()
-                    .set_title("Open Output")
-                    .add_filter("Statik Output (*.stko)", &["stko"]);
-                if let Some(p) = d.pick_file()
+                if let Some(p) = (self.picker)(&PickRequest::OpenOutput)
                     && let Err(e) = self.state.open_output(&p)
                 {
                     self.state.push_message(Message::error(e));

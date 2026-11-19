@@ -140,6 +140,10 @@ pub struct EditorState {
     pub var_edit: Option<VarEdit>,
     /// The open Variable View dialog (Variable Type, Value Labels, Missing Values).
     pub var_dialog: Option<VarDialog>,
+    /// A modal question or dialog is up (message, save prompt, recovery, procedure dialog,
+    /// Variable View dialog) or a job runs: the views ignore the keyboard. Set by the app
+    /// every frame before the views are drawn.
+    pub blocked: bool,
     align: HashMap<String, Align>,
     role: HashMap<String, Role>,
     columns: HashMap<String, usize>,

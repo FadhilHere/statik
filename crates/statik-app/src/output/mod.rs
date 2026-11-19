@@ -28,6 +28,9 @@ use table_view::{
     DATA_COLOR, TableMetrics, marked_job, measure, paint_bold, paint_table, text_node,
 };
 
+/// Hashed into the Output window's `ViewportId` (`ViewportId::from_hash_of`).
+pub const OUTPUT_VIEWPORT: &str = "statik_output";
+
 /// Title of the Output window (SPSS: "Output1 [Document1] - IBM SPSS Statistics Viewer").
 pub const OUTPUT_TITLE: &str = "Output1 [Document1] - Statik Viewer";
 
@@ -105,6 +108,9 @@ pub struct OutputView {
     sizes: HashMap<ItemRef, Vec2>,
     /// pixels_per_point and number of entries the caches were made for.
     cache_key: (u32, usize),
+    /// The viewer is a window of its own and has the keyboard focus: queued messages are
+    /// shown there instead of in the Data Editor (set every frame).
+    pub hosts_messages: bool,
 }
 
 /// Menu choices the app handles (file dialogs, other windows).
@@ -134,17 +140,19 @@ pub fn output_window(ctx: &Context, state: &mut AppState, busy: bool) -> Option<
         .with_inner_size([960.0, 680.0])
         .with_min_inner_size([360.0, 240.0]);
     ctx.show_viewport_immediate(
-        ViewportId::from_hash_of("statik_output"),
+        ViewportId::from_hash_of(OUTPUT_VIEWPORT),
         builder,
         |ui, class| {
             if class == ViewportClass::Immediate && ui.input(|i| i.viewport().close_requested()) {
                 state.show_output = false;
             }
             let action = output_ui(ui, state, busy);
-            // In its own window the viewer shows messages too (e.g. a failed copy), so they
-            // are not hidden behind it in the Data Editor. Embedded, the Data Editor's box
-            // is already on screen.
-            if class == ViewportClass::Immediate
+            // In its own window with the focus, the viewer shows the messages (e.g. a failed
+            // copy), so they are not hidden behind it in the Data Editor; otherwise the Data
+            // Editor shows them. Never both at once.
+            state.viewer.hosts_messages =
+                messages_in_output(class, ui.input(|i| i.viewport().focused));
+            if state.viewer.hosts_messages
                 && let Some(msg) = state.message()
                 && crate::dialogs::message::message_box(ui.ctx(), msg)
             {
@@ -153,6 +161,12 @@ pub fn output_window(ctx: &Context, state: &mut AppState, busy: bool) -> Option<
             action
         },
     )
+}
+
+/// Whether queued messages are shown in the Output viewer (its own window, focused) rather
+/// than in the Data Editor.
+pub fn messages_in_output(class: ViewportClass, focused: Option<bool>) -> bool {
+    class == ViewportClass::Immediate && focused == Some(true)
 }
 
 /// The viewer contents: menu bar, outline, document. Returns a menu choice for the app.

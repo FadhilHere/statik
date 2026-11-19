@@ -293,6 +293,13 @@ pub struct AppState {
     pub syntax: SyntaxWindow,
     /// The open Read CSV File / Read Excel File dialog (File ▸ Import Data).
     pub import: Option<ImportDialog>,
+    /// Output was added since the output was last saved ([`Self::save_output`]); File ▸ Exit
+    /// asks "Save contents of output viewer to Output1?" then. Opening a `.stko` file does
+    /// not change it (the opened entries are on disk, the ones already shown may not be).
+    pub output_dirty: bool,
+    /// A procedure added output: the app brings the Output window to the front (and clears
+    /// this).
+    pub raise_output: bool,
 }
 
 impl Default for AppState {
@@ -333,13 +340,21 @@ impl AppState {
             dialogs: DialogHost::default(),
             syntax: SyntaxWindow::default(),
             import: None,
+            output_dirty: false,
+            raise_output: false,
         }
+    }
+
+    /// Append an output entry (marks the output as unsaved).
+    fn push_output(&mut self, entry: OutputEntry) {
+        self.outputs.push(entry);
+        self.output_dirty = true;
     }
 
     /// File ▸ Save Output As in the viewer: all output entries as JSON (`.stko`, added when
     /// the path has another or no extension). Written to a temporary file, then renamed.
-    /// Returns the path written.
-    pub fn save_output(&self, path: &Path) -> Result<PathBuf, String> {
+    /// Returns the path written. Clears [`Self::output_dirty`].
+    pub fn save_output(&mut self, path: &Path) -> Result<PathBuf, String> {
         let path = if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("stko"))
@@ -359,6 +374,7 @@ impl AppState {
                 let _ = std::fs::remove_file(&tmp);
                 format!("Cannot write {}: {e}", path.display())
             })?;
+        self.output_dirty = false;
         Ok(path)
     }
 
@@ -482,18 +498,10 @@ impl AppState {
     /// Apply a quick command now, or package a long-running one as a [`Job`].
     pub fn prepare(&mut self, cmd: Command) -> Prepared {
         use Prepared::Done;
-        if matches!(
-            cmd,
-            Command::Undo
-                | Command::Redo
-                | Command::InsertVariable
-                | Command::InsertCases
-                | Command::Clear
-        ) {
-            // Text typed into a cell is committed first, so it lands on the cell it was typed
-            // into and not on wherever the edit moves the data.
-            self.commit_pending_edits();
-        }
+        // Text typed into a cell (Data View or Variable View) is committed first, for every
+        // command: it lands on the cell it was typed into and not on wherever an edit moves the
+        // data, and a save or procedure sees it.
+        self.commit_pending_edits();
         let rev = self.doc.rev;
         match cmd {
             Command::New => {
@@ -603,7 +611,6 @@ impl AppState {
                 },
             )),
             Command::OpenDialog(kind) => {
-                self.commit_pending_edits();
                 if self.dialogs.open(kind) {
                     return Done(Ok(()));
                 }
@@ -708,7 +715,7 @@ impl AppState {
                     self.dataset_no
                 );
                 let items = notes.iter().cloned().map(OutputItem::Warning).collect();
-                self.outputs.push(OutputEntry {
+                self.push_output(OutputEntry {
                     title: "Log".into(),
                     items,
                     log,
@@ -737,7 +744,7 @@ impl AppState {
                     ));
                 }
                 self.doc.path = Some(path);
-                self.outputs.push(OutputEntry {
+                self.push_output(OutputEntry {
                     title: "Log".into(),
                     items: Vec::new(),
                     log,
@@ -783,8 +790,18 @@ impl AppState {
                         ));
                     }
                 }
-                self.outputs.push(entry);
+                // Bring the new output into view, selected, as SPSS does.
+                let e = self.outputs.len();
+                let at = if entry.log.is_empty() && !entry.items.is_empty() {
+                    ItemRef::item(e, 0)
+                } else {
+                    ItemRef::entry(e)
+                };
+                self.push_output(entry);
+                self.viewer.scroll_to = Some(at);
+                self.viewer.selected = Some(at);
                 self.show_output = true;
+                self.raise_output = true;
                 Ok(())
             }
             JobResult::Recovered { ds, rev } => {

@@ -179,6 +179,7 @@ pub fn data_view(ui: &mut Ui, state: &mut AppState) {
     let mut acts: Vec<Act> = Vec::new();
     let page = ((avail.y - HEADER_H) / ROW_H).floor().max(1.0) as isize;
     let keys_active = ui.is_enabled()
+        && !state.editor.blocked
         && state.message().is_none()
         && state.editor.editing.is_none()
         && !ctx.text_edit_focused();
@@ -665,6 +666,11 @@ fn keyboard(ui: &mut Ui, state: &mut AppState, page: isize, n_cases: usize, n_va
 }
 
 fn apply(ui: &mut Ui, state: &mut AppState, a: Act) {
+    // A disabled grid (a job runs, a dialog is open) must not change the data: e.g. the cell
+    // editor losing focus when the grid is disabled for a save would write the cell meanwhile.
+    if !ui.is_enabled() && matches!(a, Act::Commit(..) | Act::Cmd(_)) {
+        return;
+    }
     match a {
         Act::Cell { r, c, extend } => {
             if !commit_edit(state) {

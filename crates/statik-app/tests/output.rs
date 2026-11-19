@@ -78,7 +78,11 @@ fn count<S>(h: &Harness<'_, S>, label: &str) -> usize {
 #[test]
 fn regression_output_page_has_tables_charts_outline_and_snapshot() {
     let _render = common::render_lock();
-    let mut h = viewer(regression_state(), egui::vec2(1100.0, 2600.0));
+    let mut s = regression_state();
+    // New output is selected (frame + arrow); the snapshot shows the page unselected.
+    assert!(s.viewer.selected.is_some());
+    s.viewer.selected = None;
+    let mut h = viewer(s, egui::vec2(1100.0, 2600.0));
     h.run();
     // Outline + document both show every table title.
     for t in [
@@ -305,12 +309,14 @@ fn histogram_legend_is_mean_sd_n() {
 #[test]
 fn save_and_open_output_round_trip() {
     let _render = common::render_lock();
-    let s = regression_state();
+    let mut s = regression_state();
+    assert!(s.output_dirty);
     let dir = std::env::temp_dir().join(format!("statik-out-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // The extension is added.
     let saved = s.save_output(&dir.join("hasil")).unwrap();
     assert_eq!(saved, dir.join("hasil.stko"));
+    assert!(!s.output_dirty, "saved output is clean");
     let mut t = AppState::new();
     t.open_output(&saved).unwrap();
     // Debug text: NaN cells compare unequal with ==, and every f64 must come back exactly.
