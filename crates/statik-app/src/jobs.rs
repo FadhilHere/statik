@@ -30,15 +30,6 @@ pub const WORKER_STACK: usize = 16 << 20;
 /// Name of worker threads (the crash hook in `main.rs` skips panics on them: they are caught).
 pub const WORKER_NAME: &str = "statik-job";
 
-/// Who asked for a save.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SaveKind {
-    /// File > Save / Save As...: sets the document's path and clears dirty (if unchanged since).
-    User,
-    /// Background autosave (Task 7): never touches the document's path, dirty flag or output.
-    Autosave,
-}
-
 /// What a finished job hands back to the UI thread. `rev` is the document revision
 /// ([`crate::state::Doc::rev`]) the job started from; `finish` uses it to detect edits made
 /// while the job ran.
@@ -58,7 +49,6 @@ pub enum JobResult {
         path: PathBuf,
         log: String,
         rev: u64,
-        kind: SaveKind,
     },
     /// A procedure (or transformation) ran on a clone of the dataset. `ds` is that clone after the
     /// run; `changed` says whether it must replace the document's dataset (and mark it dirty).
@@ -71,7 +61,7 @@ pub enum JobResult {
         undo: Option<EditOp>,
     },
     /// A recovery file (see [`crate::autosave`]) was read: it becomes an untitled document with
-    /// unsaved changes.
+    /// unsaved changes. (Autosave itself does not use jobs; it writes on its own thread.)
     Recovered { ds: Dataset, rev: u64 },
     /// The job failed; the message is shown to the user.
     Failed(String),

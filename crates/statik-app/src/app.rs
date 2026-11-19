@@ -18,13 +18,13 @@
 //! has succeeded; No continues; Cancel drops it (a window close is cancelled with
 //! `ViewportCommand::CancelClose`). File dialogs go through a replaceable picker
 //! ([`StatikApp::with_picker`]) so tests can script them.
-use crate::autosave::Autosave;
+use crate::autosave::{Autosave, Orphan};
 use crate::data_view::{commit_edit, data_view};
 use crate::dialogs::import::show_import;
 use crate::dialogs::message::{Answer, message_box, recovery_box, save_changes_box};
 use crate::dialogs::show_dialogs;
 use crate::editor::View;
-use crate::jobs::{Job, JobResult, RunningJob, SaveKind};
+use crate::jobs::{Job, JobResult, RunningJob};
 use crate::menu::{MenuAction, menu_bar};
 use crate::output::{OutputAction, output_window};
 use crate::state::{AppState, Command, Message, Prepared};
@@ -84,8 +84,14 @@ pub struct StatikApp {
     /// Autosave of unsaved changes ([`crate::autosave`]); off unless set with
     /// [`Self::with_autosave`].
     pub autosave: Autosave,
-    /// A recovery file to offer ("Statik closed unexpectedly. Recover data?").
-    recovery: Option<PathBuf>,
+    /// A dead instance's recovery folder to offer ("Statik closed unexpectedly. Recover
+    /// data?"). Kept on disk unless the user answers.
+    recovery: Option<Orphan>,
+    /// The folder being recovered (the Recover job runs).
+    recovering: Option<Orphan>,
+    /// The folder the current data was recovered from; removed once the data is autosaved in
+    /// this instance's folder or saved, or at a normal exit.
+    recovered_from: Option<Orphan>,
 }
 
 impl Default for StatikApp {
@@ -145,6 +151,8 @@ impl StatikApp {
             close_ok: false,
             autosave: Autosave::default(),
             recovery: None,
+            recovering: None,
+            recovered_from: None,
         }
     }
 
@@ -154,10 +162,23 @@ impl StatikApp {
         self
     }
 
-    /// Ask "Statik closed unexpectedly. Recover data?" for the recovery file `path` (found at
-    /// startup with [`crate::autosave::pending_recovery`]).
-    pub fn offer_recovery(&mut self, path: PathBuf) {
-        self.recovery = Some(path);
+    /// Ask "Statik closed unexpectedly. Recover data?" for `orphan` (found at startup with
+    /// [`crate::autosave::find_orphans`]).
+    pub fn offer_recovery(&mut self, orphan: Orphan) {
+        self.recovery = Some(orphan);
+    }
+
+    /// Clean-up at a normal exit (`eframe::App::on_exit`): this instance's recovery folder is
+    /// deleted, and so is the folder the data was recovered from (the user has answered the
+    /// save-changes question by now). A recovery still being offered or read is kept for the
+    /// next start.
+    pub fn exit_cleanup(&mut self) {
+        self.autosave.clean_exit();
+        if let Some(o) = self.recovered_from.take() {
+            o.remove();
+        }
+        self.recovery = None;
+        self.recovering = None;
     }
 
     /// Use `picker` instead of the native file dialogs (tests).
@@ -201,18 +222,18 @@ impl StatikApp {
     }
 
     fn finish(&mut self, r: JobResult) {
-        let user_save = matches!(
-            r,
-            JobResult::Saved {
-                kind: SaveKind::User,
-                ..
-            }
-        );
+        let user_save = matches!(r, JobResult::Saved { .. });
         let recovered = matches!(r, JobResult::Recovered { .. });
         let result = self.state.finish(r);
-        if recovered && result.is_ok() && self.state.doc.dirty() {
-            // Write the recovered data to a fresh recovery file at once.
-            self.autosave.recovered();
+        // The Recover job (the only job running while `recovering` is set) has finished.
+        if let Some(orphan) = self.recovering.take() {
+            if recovered && result.is_ok() && self.state.doc.dirty() {
+                // Back the recovered data up in this instance's folder at once; the old
+                // folder is removed once that has happened (see `show`).
+                self.autosave.recovered();
+                self.recovered_from = Some(orphan);
+            }
+            // Otherwise (no file readable) the folder is kept for the next start.
         }
         // The save started by "Yes" at the save-changes question: continue only if it worked.
         if let Some(a) = self.after_save.take() {
@@ -404,6 +425,14 @@ impl StatikApp {
         {
             ctx.request_repaint_after(wait);
         }
+        // Recovered data is safe once backed up here (or saved): drop the old folder.
+        if self.recovered_from.is_some()
+            && (self.autosave.has_saved() || !self.state.doc.dirty())
+            && !self.autosave.is_running()
+            && let Some(o) = self.recovered_from.take()
+        {
+            o.remove();
+        }
         // Closing the window (title-bar X, Alt+F4): ask about unsaved changes first.
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_ok {
             self.state.commit_pending_edits();
@@ -522,11 +551,14 @@ impl StatikApp {
             && self.state.message().is_none()
             && let Some(recover) = recovery_box(&ctx)
         {
-            let path = self.recovery.take().expect("checked above");
+            let orphan = self.recovery.take().expect("checked above");
             if recover {
-                self.dispatch(Command::Recover(path), &ctx);
+                self.dispatch(Command::Recover(orphan.files().to_vec()), &ctx);
+                if self.job.is_some() {
+                    self.recovering = Some(orphan);
+                }
             } else {
-                self.autosave.discard();
+                orphan.remove();
             }
         }
 
@@ -597,8 +629,8 @@ impl eframe::App for StatikApp {
         self.show(ui);
     }
 
-    /// A normal exit: the recovery files are deleted and the clean-exit marker is written.
+    /// A normal exit: see [`StatikApp::exit_cleanup`].
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.autosave.clean_exit();
+        self.exit_cleanup();
     }
 }

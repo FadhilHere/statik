@@ -15,7 +15,6 @@ pub mod syntax;
 pub mod variable_view;
 
 pub use app::StatikApp;
-pub use jobs::SaveKind;
 pub use state::{
     AppState, Command, DialogKind, Doc, Message, OutputEntry, ProcOutput, run_procedure,
 };

@@ -47,14 +47,21 @@ fn install_crash_hook() {
 fn main() -> eframe::Result {
     install_crash_hook();
     let state = AppState::new();
-    // Autosave to %LOCALAPPDATA%\Statik\recovery; recovery files newer than the last normal
-    // exit mean Statik closed unexpectedly.
-    let dir = autosave::default_dir();
-    let pending = dir.as_deref().and_then(autosave::pending_recovery);
-    let mut app =
-        StatikApp::new(state).with_autosave(Autosave::new(dir, std::time::Instant::now()));
-    if let Some(p) = pending {
-        app.offer_recovery(p);
+    // Autosave to %LOCALAPPDATA%\Statik\recovery\<pid>-<millis>; a folder left with autosave
+    // files by an instance that is gone means Statik closed unexpectedly. The newest is offered;
+    // the others stay for later starts.
+    let now = std::time::Instant::now();
+    let mut app = StatikApp::new(state);
+    if let Some(root) = autosave::default_root() {
+        let orphan = autosave::find_orphans(&root).into_iter().next();
+        let auto = match autosave::Instance::create(&root) {
+            Ok(i) => Autosave::for_instance(i, now),
+            Err(e) => Autosave::unavailable(e),
+        };
+        app = app.with_autosave(auto);
+        if let Some(o) = orphan {
+            app.offer_recovery(o);
+        }
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

@@ -2,7 +2,7 @@
 mod common;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use statik_app::autosave::{self, Autosave};
+use statik_app::autosave::{self, Autosave, Instance};
 use statik_app::jobs::{Job, JobResult};
 use statik_app::{AppState, Command, StatikApp};
 use std::path::{Path, PathBuf};
@@ -172,31 +172,6 @@ fn autosave_runs_while_a_procedure_is_busy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn recovery_files_newer_than_the_clean_exit_marker_are_offered() {
-    let dir = tmp_dir("marker");
-    assert_eq!(autosave::pending_recovery(&dir), None);
-    let ds = skripsi().doc.ds().clone();
-    let p1 = autosave::write_recovery(&dir, &ds).unwrap();
-    let p2 = autosave::write_recovery(&dir, &ds).unwrap();
-    assert_ne!(p1, p2);
-    // The newest is offered.
-    assert_eq!(autosave::pending_recovery(&dir), Some(p2.clone()));
-    // A clean exit removes them and writes the marker.
-    autosave::mark_clean_exit(&dir).unwrap();
-    assert!(files(&dir).is_empty());
-    assert_eq!(autosave::pending_recovery(&dir), None);
-    // A file older than the marker (left from before a clean exit) is not offered.
-    let old = dir.join("autosave-0000000000000001.sav");
-    sav_io::write_sav(&ds, &old).unwrap();
-    assert_eq!(files(&dir), vec![old]);
-    assert_eq!(autosave::pending_recovery(&dir), None);
-    // One written after the clean exit is.
-    let p3 = autosave::write_recovery(&dir, &ds).unwrap();
-    assert_eq!(autosave::pending_recovery(&dir), Some(p3));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 fn harness(app: StatikApp) -> Harness<'static, StatikApp> {
     let mut h = Harness::builder()
         .with_size(egui::vec2(1024.0, 700.0))
@@ -206,25 +181,130 @@ fn harness(app: StatikApp) -> Harness<'static, StatikApp> {
     h
 }
 
+// ---------------------------------------------------------------------------------------------
+// Per-instance folders and recovery
+// ---------------------------------------------------------------------------------------------
+
+/// An instance that "crashed": its folder holds these datasets as autosave files (oldest first)
+/// and its lock is released. Returns the folder.
+fn crashed_instance(root: &Path, data: &[&dataset::Dataset]) -> PathBuf {
+    let inst = Instance::create(root).unwrap();
+    for ds in data {
+        autosave::write_recovery(inst.dir(), ds).unwrap();
+    }
+    let dir = inst.dir().to_path_buf();
+    drop(inst); // the process ended without a normal exit
+    dir
+}
+
+fn orphan_dirs(root: &Path) -> Vec<PathBuf> {
+    autosave::find_orphans(root)
+        .iter()
+        .map(|o| o.dir().to_path_buf())
+        .collect()
+}
+
+#[test]
+fn two_instances_keep_to_their_own_folders() {
+    let root = tmp_dir("two");
+    let t0 = Instant::now();
+    let ds = dirty_skripsi();
+    let a_inst = Instance::create(&root).unwrap();
+    let b_inst = Instance::create(&root).unwrap();
+    let (a_dir, b_dir) = (a_inst.dir().to_path_buf(), b_inst.dir().to_path_buf());
+    assert_ne!(a_dir, b_dir);
+    let mut a = Autosave::for_instance(a_inst, t0);
+    let mut b = Autosave::for_instance(b_inst, t0);
+
+    // Both autosave; each prunes only its own folder.
+    let mut sa = dirty_skripsi();
+    for k in 0..4 {
+        set_first_cell(&mut sa, k as f64);
+        a.tick(&sa, t0 + (k + 1) * autosave::INTERVAL, || {});
+        a.wait();
+    }
+    b.tick(&ds, t0 + autosave::INTERVAL, || {});
+    b.wait();
+    assert_eq!(files(&a_dir).len(), autosave::KEEP);
+    assert_eq!(files(&b_dir).len(), 1);
+
+    // A running instance is never offered as crashed.
+    assert!(orphan_dirs(&root).is_empty());
+
+    // A becomes clean: only A's files go.
+    let out = tmp_dir("two-out");
+    sa.apply(Command::SaveAs(out.join("a.sav"))).unwrap();
+    a.tick(&sa, t0 + 9 * autosave::INTERVAL, || {});
+    assert!(files(&a_dir).is_empty());
+    assert_eq!(files(&b_dir).len(), 1);
+
+    // A exits normally: its folder is gone, B's is untouched and still not an orphan.
+    a.clean_exit();
+    assert!(!a_dir.exists());
+    assert_eq!(files(&b_dir).len(), 1);
+    assert!(orphan_dirs(&root).is_empty());
+
+    // B "crashes" (its lock is released, the folder stays): now it is an orphan.
+    drop(b);
+    assert_eq!(orphan_dirs(&root), vec![b_dir.clone()]);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn find_orphans_cleans_dead_folders_and_orders_newest_first() {
+    let root = tmp_dir("orphans");
+    let ds = skripsi().doc.ds().clone();
+    let older = crashed_instance(&root, &[&ds]);
+    let newer = crashed_instance(&root, &[&ds, &ds]);
+    // A dead folder with only a stray temp file from a cut-short write, and one with nothing.
+    let stray = Instance::create(&root).unwrap();
+    let stray_dir = stray.dir().to_path_buf();
+    std::fs::write(stray_dir.join("autosave-1.sav.123-456.tmp"), b"half").unwrap();
+    drop(stray);
+    let empty = Instance::create(&root).unwrap();
+    let empty_dir = empty.dir().to_path_buf();
+    drop(empty);
+    // A stray temp file next to real autosave files.
+    std::fs::write(newer.join("x.sav.1-2.tmp"), b"half").unwrap();
+
+    let found = autosave::find_orphans(&root);
+    let dirs: Vec<_> = found.iter().map(|o| o.dir().to_path_buf()).collect();
+    assert_eq!(dirs, vec![newer.clone(), older.clone()]);
+    assert_eq!(found[0].files().len(), 2);
+    assert!(!stray_dir.exists());
+    assert!(!empty_dir.exists());
+    assert!(!newer.join("x.sav.1-2.tmp").exists());
+    // While offered, the folders are locked: a second Statik does not offer them too.
+    assert!(orphan_dirs(&root).is_empty());
+    drop(found);
+    assert_eq!(orphan_dirs(&root).len(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn app_offering(root: &Path, auto_dir: &Path) -> StatikApp {
+    let orphan = autosave::find_orphans(root).into_iter().next().unwrap();
+    let mut app = StatikApp::new(AppState::new())
+        .with_autosave(Autosave::new(Some(auto_dir.to_path_buf()), Instant::now()));
+    app.offer_recovery(orphan);
+    app
+}
+
 #[test]
 fn recover_opens_the_newest_file_as_untitled_dirty_data() {
     let _render = common::render_lock();
-    let dir = tmp_dir("recover");
+    let root = tmp_dir("recover");
+    let mine = tmp_dir("recover-mine");
     let mut s = dirty_skripsi();
-    autosave::write_recovery(&dir, s.doc.ds()).unwrap();
+    let first = s.doc.ds().clone();
     set_first_cell(&mut s, 77.0);
-    let newest = autosave::write_recovery(&dir, s.doc.ds()).unwrap();
-    let pending = autosave::pending_recovery(&dir).unwrap();
-    assert_eq!(pending, newest);
+    let dead = crashed_instance(&root, &[&first, s.doc.ds()]);
 
-    let mut app =
-        StatikApp::new(AppState::new()).with_autosave(Autosave::new(Some(dir.clone()), Instant::now()));
-    app.offer_recovery(pending);
-    let mut h = harness(app);
+    let mut h = harness(app_offering(&root, &mine));
     h.get_by_label("Statik closed unexpectedly. Recover data?");
     h.get_by_label("Discard");
     h.get_by_label("Recover").click();
-    h.run();
+    h.step();
     h.state_mut().wait_for_job();
     h.run();
     let st = &h.state().state;
@@ -235,25 +315,108 @@ fn recover_opens_the_newest_file_as_untitled_dirty_data() {
     assert_eq!(first_cell(st.doc.ds()), 77.0);
     assert!(st.title().starts_with("*Untitled"), "{}", st.title());
     assert!(h.query_by_label("Recover").is_none());
-    // The recovered data is autosaved again right away (the old files stay until then).
+    // The recovered data is backed up in this instance's folder right away; then the dead
+    // instance's folder is removed.
     h.state_mut().autosave.wait();
-    assert!(!files(&dir).is_empty());
-    let _ = std::fs::remove_dir_all(&dir);
+    h.run();
+    assert_eq!(files(&mine).len(), 1);
+    assert!(!dead.exists());
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&mine);
 }
 
 #[test]
-fn discard_deletes_the_recovery_files() {
+fn recover_falls_back_to_an_older_file_and_keeps_unreadable_folders() {
     let _render = common::render_lock();
-    let dir = tmp_dir("discard");
-    let p = autosave::write_recovery(&dir, skripsi().doc.ds()).unwrap();
-    let mut app =
-        StatikApp::new(AppState::new()).with_autosave(Autosave::new(Some(dir.clone()), Instant::now()));
-    app.offer_recovery(p);
-    let mut h = harness(app);
+    let root = tmp_dir("fallback");
+    let mine = tmp_dir("fallback-mine");
+    let mut s = dirty_skripsi();
+    set_first_cell(&mut s, 5.0);
+    let dead = crashed_instance(&root, &[s.doc.ds(), s.doc.ds()]);
+    // The newest file is damaged: the older one is used.
+    let f = files(&dead);
+    std::fs::write(&f[0], b"not a sav file").unwrap();
+    let mut h = harness(app_offering(&root, &mine));
+    h.get_by_label("Recover").click();
+    h.step();
+    h.state_mut().wait_for_job();
+    h.run();
+    assert!(h.state().state.messages.is_empty());
+    assert_eq!(first_cell(h.state().state.doc.ds()), 5.0);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // Nothing readable: an error, the data stays empty, and the folder is kept (also at exit).
+    let root = tmp_dir("fallback2");
+    let dead = crashed_instance(&root, &[s.doc.ds()]);
+    std::fs::write(&files(&dead)[0], b"broken").unwrap();
+    let mut h = harness(app_offering(&root, &mine));
+    h.get_by_label("Recover").click();
+    h.step();
+    h.state_mut().wait_for_job();
+    h.run();
+    let msg = h.state().state.message().expect("an error").text.clone();
+    assert!(msg.contains("recovery files are kept"), "{msg}");
+    assert!(!h.state().state.doc.dirty());
+    h.state_mut().exit_cleanup();
+    assert_eq!(files(&dead).len(), 1);
+    assert_eq!(orphan_dirs(&root), vec![dead]);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&mine);
+}
+
+#[test]
+fn discard_deletes_the_dead_folder() {
+    let _render = common::render_lock();
+    let root = tmp_dir("discard");
+    let mine = tmp_dir("discard-mine");
+    let dead = crashed_instance(&root, &[skripsi().doc.ds()]);
+    let mut h = harness(app_offering(&root, &mine));
     h.get_by_label("Discard").click();
     h.run();
-    assert!(files(&dir).is_empty());
+    assert!(!dead.exists());
     assert!(h.query_by_label("Recover").is_none());
     assert!(!h.state().state.doc.dirty());
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&mine);
+}
+
+/// Closing the window while "Recover data?" is shown (the data is clean, so it closes) keeps
+/// the recovery files for the next start.
+#[test]
+fn closing_at_the_recovery_prompt_keeps_the_files() {
+    let _render = common::render_lock();
+    let root = tmp_dir("close-prompt");
+    let mine = tmp_dir("close-prompt-mine");
+    let dead = crashed_instance(&root, &[skripsi().doc.ds()]);
+    let mut h = harness(app_offering(&root, &mine));
+    h.input_mut()
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    h.step();
+    assert!(h.state().closing());
+    h.state_mut().exit_cleanup();
+    assert_eq!(files(&dead).len(), 1);
+    assert_eq!(orphan_dirs(&root), vec![dead]);
+    assert!(!mine.exists(), "the own folder is removed at a normal exit");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Closing while the Recover job runs keeps them too.
+#[test]
+fn exit_while_recovering_keeps_the_files() {
+    let _render = common::render_lock();
+    let root = tmp_dir("close-recovering");
+    let mine = tmp_dir("close-recovering-mine");
+    let dead = crashed_instance(&root, &[skripsi().doc.ds()]);
+    let mut h = harness(app_offering(&root, &mine));
+    h.get_by_label("Recover").click();
+    h.step();
+    assert!(h.state().busy().is_some());
+    h.state_mut().exit_cleanup();
+    assert_eq!(files(&dead).len(), 1);
+    h.state_mut().wait_for_job();
+    let _ = std::fs::remove_dir_all(&root);
 }

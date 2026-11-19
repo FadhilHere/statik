@@ -1,4 +1,4 @@
-use statik_app::jobs::{JobResult, RunningJob, SaveKind};
+use statik_app::jobs::{JobResult, RunningJob};
 use statik_app::state::{
     AppState, Command, Message, MessageKind, Prepared, ProcOutput, run_procedure,
 };
@@ -320,21 +320,6 @@ fn new_during_procedure_conflicts() {
     s.finish(job.run_inline()).unwrap();
     assert_eq!(s.doc.ds().n_vars(), 0, "old data must not come back");
     assert!(!s.doc.dirty());
-}
-
-#[test]
-fn autosave_never_touches_path_or_dirty() {
-    let mut s = skripsi();
-    s.touch();
-    let outputs = s.outputs.len();
-    let path = tmp_dir("autosave").join("auto.sav");
-    let r = s.save_job(path.clone(), SaveKind::Autosave).run_inline();
-    s.finish(r).unwrap();
-    assert!(path.exists());
-    assert!(s.doc.dirty());
-    assert!(s.title().starts_with("*skripsi60.csv"));
-    assert_eq!(s.outputs.len(), outputs);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]

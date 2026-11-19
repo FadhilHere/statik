@@ -16,7 +16,7 @@ use crate::dialogs::DialogHost;
 use crate::dialogs::import::ImportDialog;
 use crate::edit::EditOp;
 use crate::editor::EditorState;
-use crate::jobs::{Job, JobResult, SaveKind};
+use crate::jobs::{Job, JobResult};
 use crate::output::{ItemRef, OutputView};
 use crate::syntax::SyntaxWindow;
 use dataset::Dataset;
@@ -189,9 +189,9 @@ pub enum Command {
     HideOutput,
     /// File > Exit.
     Exit,
-    /// Recover data after a crash: read this recovery file (see [`crate::autosave`]) as a new
-    /// untitled document with unsaved changes.
-    Recover(PathBuf),
+    /// Recover data after a crash: read the first readable of these recovery files (newest
+    /// first; see [`crate::autosave`]) as a new untitled document with unsaved changes.
+    Recover(Vec<PathBuf>),
     OpenDialog(DialogKind),
 }
 
@@ -533,7 +533,7 @@ impl AppState {
             }
             Command::ImportXlsx(path, sheet) => Prepared::Job(xlsx_job(path, sheet, true, rev)),
             Command::Save => match &self.doc.path {
-                Some(p) if is_sav(p) => Prepared::Job(self.save_job(p.clone(), SaveKind::User)),
+                Some(p) if is_sav(p) => Prepared::Job(self.save_job(p.clone())),
                 _ => Done(Err(
                     "This data has not been saved as a .sav file yet. Use Save As...".into(),
                 )),
@@ -544,7 +544,7 @@ impl AppState {
                     s.push(".sav");
                     path = PathBuf::from(s);
                 }
-                Prepared::Job(self.save_job(path, SaveKind::User))
+                Prepared::Job(self.save_job(path))
             }
             Command::Undo => {
                 self.undo();
@@ -582,15 +582,24 @@ impl AppState {
                 self.exit_requested = true;
                 Done(Ok(()))
             }
-            Command::Recover(path) => Prepared::Job(Job::new(
+            Command::Recover(files) => Prepared::Job(Job::new(
                 "Recovering data...",
-                move || match sav_io::read_sav(&path) {
-                    Ok((ds, _)) => JobResult::Recovered { ds, rev },
-                    Err(e) => JobResult::Failed(format!(
-                        "Cannot recover the data from {}:
-{e}",
-                        path.display()
-                    )),
+                move || {
+                    // Newest first; a file that cannot be read falls back to the next one.
+                    let mut errors = Vec::new();
+                    for path in &files {
+                        match sav_io::read_sav(path) {
+                            Ok((ds, _)) => return JobResult::Recovered { ds, rev },
+                            Err(e) => errors.push(format!("{}: {e}", path.display())),
+                        }
+                    }
+                    if errors.is_empty() {
+                        errors.push("no recovery file was found".into());
+                    }
+                    JobResult::Failed(format!(
+                        "Cannot recover the data. The recovery files are kept.\n{}",
+                        errors.join("\n")
+                    ))
                 },
             )),
             Command::OpenDialog(kind) => {
@@ -613,24 +622,15 @@ impl AppState {
         n
     }
 
-    /// Write a clone of the current dataset to `path` (atomic, via `sav_io::write_sav`).
-    /// A [`SaveKind::Autosave`] result never changes the document's path, dirty flag or output.
-    pub fn save_job(&self, path: PathBuf, kind: SaveKind) -> Job {
+    /// File ▸ Save / Save As: write a clone of the current dataset to `path` (atomic, via
+    /// `sav_io::write_sav`); the result sets the document's path and clears dirty.
+    pub fn save_job(&self, path: PathBuf) -> Job {
         let ds = self.doc.ds.clone();
         let rev = self.doc.rev;
-        let label = match kind {
-            SaveKind::User => "Saving data file...",
-            SaveKind::Autosave => "Autosaving...",
-        };
-        Job::new(label, move || match sav_io::write_sav(&ds, &path) {
+        Job::new("Saving data file...", move || match sav_io::write_sav(&ds, &path) {
             Ok(()) => {
                 let log = format!("SAVE OUTFILE={}\n  /COMPRESSED.", quoted(&path));
-                JobResult::Saved {
-                    path,
-                    log,
-                    rev,
-                    kind,
-                }
+                JobResult::Saved { path, log, rev }
             }
             Err(e) => JobResult::Failed(format!("Cannot save {}:\n{e}", path.display())),
         })
@@ -723,16 +723,7 @@ impl AppState {
                 }
                 Ok(())
             }
-            JobResult::Saved {
-                kind: SaveKind::Autosave,
-                ..
-            } => Ok(()),
-            JobResult::Saved {
-                path,
-                log,
-                rev,
-                kind: SaveKind::User,
-            } => {
+            JobResult::Saved { path, log, rev } => {
                 if rev == self.doc.rev {
                     self.doc.dirty = false;
                 } else {
@@ -800,7 +791,8 @@ impl AppState {
                 if rev != self.doc.rev {
                     self.push_message(Message::warning(
                         "Data changed",
-                        "The data was changed while the recovered data was being read, so it                          was not opened.",
+                        "The data was changed while the recovered data was being read, so it \
+                         was not opened.",
                     ));
                     return Ok(());
                 }
